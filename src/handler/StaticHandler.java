@@ -52,7 +52,7 @@ public class StaticHandler {
             return createErrorResponse(500, "Internal Server Error");
         }
     }
-
+ 
     private Path resolvePath(String requestPath) {
         try {
             if (requestPath.contains("..")) {
