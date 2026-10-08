@@ -24,6 +24,10 @@ public class StaticHandler {
             requestPath = "/";
         }
 
+        if (requestPath.contains("..")) {
+            return createErrorResponse(403, "Forbidden");
+        }
+
         Path resolvedPath = resolvePath(requestPath);
         if (resolvedPath == null) {
             return createErrorResponse(403, "Forbidden");
