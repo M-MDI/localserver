@@ -1,6 +1,7 @@
 package http;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -33,7 +34,52 @@ public class HttpParser {
         }
         request.setHeaders(headers);
 
+        // Parse Body
+        if (headers.containsKey("Transfer-Encoding") && headers.get("Transfer-Encoding").contains("chunked")) {
+            request.setBody(parseChunkedBody(buffer));
+        } else if (headers.containsKey("Content-Length")) {
+            try {
+                int contentLength = Integer.parseInt(headers.get("Content-Length"));
+                if (contentLength > 0 && buffer.remaining() >= contentLength) {
+                    byte[] bodyBytes = new byte[contentLength];
+                    buffer.get(bodyBytes);
+                    request.setBody(new String(bodyBytes, StandardCharsets.UTF_8));
+                }
+            } catch (NumberFormatException e) {
+                // Invalid content length
+            }
+        }
+
         return request;
+    }
+
+    private static String parseChunkedBody(ByteBuffer buffer) {
+        StringBuilder body = new StringBuilder();
+        while (true) {
+            String hexSize = readLine(buffer);
+            if (hexSize == null || hexSize.isEmpty()) {
+                break;
+            }
+            try {
+                int chunkSize = Integer.parseInt(hexSize.trim(), 16);
+                if (chunkSize == 0) {
+                    readLine(buffer); // Consume trailing \r\n
+                    break;
+                }
+                
+                if (buffer.remaining() >= chunkSize) {
+                    byte[] chunk = new byte[chunkSize];
+                    buffer.get(chunk);
+                    body.append(new String(chunk, StandardCharsets.UTF_8));
+                    readLine(buffer); // Consume trailing \r\n after chunk data
+                } else {
+                    break; // Wait for more data
+                }
+            } catch (NumberFormatException e) {
+                break; // Invalid chunk size
+            }
+        }
+        return body.toString();
     }
 
     private static String readLine(ByteBuffer buffer) {
