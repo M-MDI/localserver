@@ -2,7 +2,6 @@ package server;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
 import java.nio.channels.*;
 import java.util.Iterator;
 import java.util.Set;
@@ -11,6 +10,7 @@ public class HttpServer {
     private final int[] ports;
     private Selector selector;
     private volatile boolean running;
+    private static final long CONNECTION_TIMEOUT_MS = 30000;
 
     public HttpServer(int[] ports) {
         this.ports = ports;
@@ -32,7 +32,8 @@ public class HttpServer {
 
         while (running) {
             try {
-                selector.select();
+                // Use a timeout so we can periodically check for idle connections
+                selector.select(1000);
                 Set<SelectionKey> selectedKeys = selector.selectedKeys();
                 Iterator<SelectionKey> iter = selectedKeys.iterator();
 
@@ -52,6 +53,8 @@ public class HttpServer {
                         handleWrite(key);
                     }
                 }
+                
+                checkTimeouts();
             } catch (IOException e) {
                 if (running) {
                     e.printStackTrace();
@@ -112,6 +115,23 @@ public class HttpServer {
         } catch (IOException e) {
             key.cancel();
             e.printStackTrace();
+        }
+    }
+
+    private void checkTimeouts() {
+        long now = System.currentTimeMillis();
+        for (SelectionKey key : selector.keys()) {
+            if (key.isValid() && key.attachment() instanceof Connection) {
+                Connection connection = (Connection) key.attachment();
+                if (now - connection.getLastActiveTime() > CONNECTION_TIMEOUT_MS) {
+                    try {
+                        connection.close();
+                        key.cancel();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
         }
     }
 
