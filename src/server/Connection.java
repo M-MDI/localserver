@@ -8,6 +8,7 @@ import http.HttpRequest;
 import http.HttpResponse;
 import http.PayloadTooLargeException;
 import handler.StaticHandler;
+import handler.UploadHandler;
 import router.Route;
 import router.Router;
 
@@ -56,7 +57,12 @@ public class Connection {
         Router router = new Router();
         Route defaultRoute = new Route("/", documentRoot);
         router.setDefaultRoute(defaultRoute);
-        
+
+        String uploadDir = documentRoot + "/uploads";
+        Route uploadRoute = new Route("/upload", uploadDir);
+        uploadRoute.addAcceptedMethod("POST");
+        router.addRoute(uploadRoute);
+
         Route route = router.resolve(request.getPath());
         if (route != null) {
             // Check method
@@ -64,6 +70,10 @@ public class Connection {
                 writeBuffer = createErrorResponse(405, "Method Not Allowed");
             } else if (route.isRedirect()) {
                 writeBuffer = createRedirectResponse(route.getRedirectPath());
+            } else if (request.getPath().startsWith("/upload") && "POST".equalsIgnoreCase(request.getMethod())) {
+                UploadHandler uploadHandler = new UploadHandler(uploadDir);
+                HttpResponse response = uploadHandler.handle(request);
+                writeBuffer = response.toByteBuffer();
             } else {
                 StaticHandler handler = new StaticHandler(route.getDocumentRoot());
                 HttpResponse response = handler.handle(request);
