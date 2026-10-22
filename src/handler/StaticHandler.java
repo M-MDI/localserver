@@ -15,7 +15,8 @@ public class StaticHandler {
     }
 
     public HttpResponse handle(HttpRequest request) {
-        if (!"GET".equalsIgnoreCase(request.getMethod())) {
+        String method = request.getMethod();
+        if (method == null) {
             return createErrorResponse(405, "Method Not Allowed");
         }
 
@@ -33,6 +34,16 @@ public class StaticHandler {
             return createErrorResponse(403, "Forbidden");
         }
 
+        if ("DELETE".equalsIgnoreCase(method)) {
+            return handleDelete(resolvedPath);
+        } else if ("GET".equalsIgnoreCase(method)) {
+            return handleGet(resolvedPath);
+        } else {
+            return createErrorResponse(405, "Method Not Allowed");
+        }
+    }
+
+    private HttpResponse handleGet(Path resolvedPath) {
         if (!Files.exists(resolvedPath)) {
             return createErrorResponse(404, "Not Found");
         }
@@ -52,6 +63,31 @@ public class StaticHandler {
             } else {
                 return serveFile(resolvedPath);
             }
+        } catch (IOException e) {
+            return createErrorResponse(500, "Internal Server Error");
+        }
+    }
+
+    private HttpResponse handleDelete(Path resolvedPath) {
+        if (!Files.exists(resolvedPath)) {
+            return createErrorResponse(404, "Not Found");
+        }
+
+        if (!Files.isWritable(resolvedPath)) {
+            return createErrorResponse(403, "Forbidden");
+        }
+
+        if (Files.isDirectory(resolvedPath)) {
+            return createErrorResponse(403, "Forbidden");
+        }
+
+        try {
+            Files.delete(resolvedPath);
+            HttpResponse response = new HttpResponse();
+            response.setStatusCode(204);
+            response.setStatusText("No Content");
+            response.setHeader("Connection", "close");
+            return response;
         } catch (IOException e) {
             return createErrorResponse(500, "Internal Server Error");
         }
