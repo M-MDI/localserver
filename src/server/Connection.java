@@ -9,6 +9,7 @@ import http.HttpResponse;
 import http.PayloadTooLargeException;
 import handler.StaticHandler;
 import handler.UploadHandler;
+import handler.CGIHandler;
 import router.Route;
 import router.Router;
 
@@ -63,6 +64,10 @@ public class Connection {
         uploadRoute.addAcceptedMethod("POST");
         router.addRoute(uploadRoute);
 
+        String cgiDir = documentRoot + "/cgi-bin";
+        Route cgiRoute = new Route("/cgi-bin", cgiDir);
+        router.addRoute(cgiRoute);
+
         Route route = router.resolve(request.getPath());
         if (route != null) {
             // Check method
@@ -73,6 +78,10 @@ public class Connection {
             } else if (request.getPath().startsWith("/upload") && "POST".equalsIgnoreCase(request.getMethod())) {
                 UploadHandler uploadHandler = new UploadHandler(uploadDir);
                 HttpResponse response = uploadHandler.handle(request);
+                writeBuffer = response.toByteBuffer();
+            } else if (request.getPath().startsWith("/cgi-bin")) {
+                CGIHandler cgiHandler = new CGIHandler(cgiDir);
+                HttpResponse response = cgiHandler.handle(request);
                 writeBuffer = response.toByteBuffer();
             } else {
                 StaticHandler handler = new StaticHandler(route.getDocumentRoot());

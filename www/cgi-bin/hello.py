@@ -1,0 +1,10 @@
+print("Content-Type: text/plain")
+print()
+print("Hello from CGI!")
+print("PATH_INFO:", end=" ")
+import os
+print(os.environ.get("PATH_INFO", ""))
+print("QUERY_STRING:", end=" ")
+print(os.environ.get("QUERY_STRING", ""))
+print("REQUEST_METHOD:", end=" ")
+print(os.environ.get("REQUEST_METHOD", ""))
