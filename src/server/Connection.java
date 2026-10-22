@@ -16,19 +16,14 @@ public class Connection {
     private final ByteBuffer readBuffer;
     private ByteBuffer writeBuffer;
     private long lastActiveTime;
-    private static final Router router;
+    private final String documentRoot;
 
-    static {
-        router = new Router();
-        Route defaultRoute = new Route("/", "./www");
-        router.setDefaultRoute(defaultRoute);
-    }
-
-    public Connection(SocketChannel channel) {
+    public Connection(SocketChannel channel, String documentRoot) {
         this.channel = channel;
         this.readBuffer = ByteBuffer.allocate(8192);
         this.writeBuffer = null;
         this.lastActiveTime = System.currentTimeMillis();
+        this.documentRoot = documentRoot;
     }
 
     public boolean read() throws IOException {
@@ -58,6 +53,10 @@ public class Connection {
             return;
         }
 
+        Router router = new Router();
+        Route defaultRoute = new Route("/", documentRoot);
+        router.setDefaultRoute(defaultRoute);
+        
         Route route = router.resolve(request.getPath());
         if (route != null) {
             // Check method

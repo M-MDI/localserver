@@ -8,12 +8,14 @@ import java.util.Set;
 
 public class HttpServer {
     private final int[] ports;
+    private final String documentRoot;
     private Selector selector;
     private volatile boolean running;
     private static final long CONNECTION_TIMEOUT_MS = 30000;
 
-    public HttpServer(int[] ports) {
+    public HttpServer(int[] ports, String documentRoot) {
         this.ports = ports;
+        this.documentRoot = documentRoot;
     }
 
     public void start() throws IOException {
@@ -70,7 +72,7 @@ public class HttpServer {
 
             if (clientChannel != null) {
                 clientChannel.configureBlocking(false);
-                Connection connection = new Connection(clientChannel);
+                Connection connection = new Connection(clientChannel, documentRoot);
                 clientChannel.register(selector, SelectionKey.OP_READ, connection);
             }
         } catch (IOException e) {
