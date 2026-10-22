@@ -2,57 +2,49 @@
 
 A lightweight HTTP/1.1 web server written entirely in Java using the Java NIO API.
 
-The project is designed around a **single process and a single event-driven thread**, using `Selector`, `ServerSocketChannel`, and `SocketChannel` instead of thread-per-connection or external web server frameworks.
+The project is designed around a **single process and a single event-driven thread**, using `Selector`, `ServerSocketChannel`, and `SocketChannel` instead of a thread-per-connection architecture or external web server frameworks.
 
-## Team
+## Developer
 
-| Developer     | Responsibility                                                 |
-| ------------- | -------------------------------------------------------------- |
-| **mmoulabbi** | Core server, HTTP layer, routing, integration                  |
-| **omar**      | Handlers, configuration, CGI, sessions, feature implementation |
-
-The project is split by responsibility so both developers can work independently and minimize conflicts.
+**Mehdi Moulabbi (`mmoulabbi`)** — Sole developer responsible for architecture, implementation, integration, testing, security, and documentation.
 
 ---
 
-# Project Goals
+## Project Goals
 
-LocalServer must provide the core functionality of an HTTP/1.1 web server:
+LocalServer aims to provide the core functionality of an HTTP/1.1 web server:
 
-* HTTP/1.1 request/response handling
-* GET, POST and DELETE
-* Multiple listening ports
-* Non-blocking I/O
-* Event-driven architecture
-* Static file serving
-* File uploads
-* Directory handling
-* Custom error pages
-* HTTP redirects
-* Chunked requests
-* Request body limits
-* Routing
-* Server configuration
-* CGI execution
-* `PATH_INFO`
-* Cookies
-* Sessions
-* Request timeouts
-* Protection against malformed requests
-* Protection against path traversal
-* Stability under multiple requests
+- HTTP/1.1 request and response handling
+- GET, POST, and DELETE methods
+- Multiple listening ports
+- Non-blocking I/O
+- Event-driven architecture
+- Static file serving
+- File uploads
+- Directory handling and listing
+- Custom error pages
+- HTTP redirects
+- Chunked request parsing
+- Request body size limits
+- Request routing
+- Server configuration
+- CGI execution
+- `PATH_INFO` support
+- Cookies and sessions
+- Request timeouts
+- Protection against malformed requests
+- Protection against path traversal
+- Stability under multiple requests
 
-The implementation must remain Java-only and must not use external HTTP server frameworks such as Netty, Jetty or Grizzly.
+The implementation must remain Java-based and must not use external HTTP server frameworks such as Netty, Jetty, or Grizzly.
 
----
+## Architecture
 
-# Architecture
-
-The server follows this flow:
+The server follows this request-processing flow:
 
 ```text
                     ┌─────────────────────┐
-                    │      Client         │
+                    │       Client        │
                     └──────────┬──────────┘
                                │
                                ▼
@@ -68,12 +60,12 @@ The server follows this flow:
                                │
                                ▼
                     ┌─────────────────────┐
-                    │    HttpParser       │
+                    │     HttpParser      │
                     └──────────┬──────────┘
                                │
                                ▼
                     ┌─────────────────────┐
-                    │    HttpRequest      │
+                    │     HttpRequest     │
                     └──────────┬──────────┘
                                │
                                ▼
@@ -81,12 +73,12 @@ The server follows this flow:
                     │       Router        │
                     └──────────┬──────────┘
                                │
-              ┌────────────────┼────────────────┐
-              │                │                │
-              ▼                ▼                ▼
-       StaticHandler     UploadHandler      CGIHandler
-              │                │                │
-              └────────────────┼────────────────┘
+                ┌──────────────┼──────────────┐
+                │              │              │
+                ▼              ▼              ▼
+          StaticHandler   UploadHandler   CGIHandler
+                │              │              │
+                └──────────────┼──────────────┘
                                │
                                ▼
                     ┌─────────────────────┐
@@ -99,13 +91,25 @@ The server follows this flow:
                     └─────────────────────┘
 ```
 
+### Architectural principles
+
+- `HttpServer` owns the NIO event loop and listening sockets.
+- `Connection` manages individual client connections and their lifecycle.
+- `HttpParser` parses incoming HTTP requests.
+- `HttpRequest` represents a parsed request.
+- `Router` selects the appropriate handler.
+- Handlers implement application-level behavior.
+- `HttpResponse` represents the outgoing HTTP response.
+- The server layer remains responsible for connection state and network I/O.
+
+The design avoids unnecessary abstractions and external dependencies.
+
 ---
 
-# Project Structure
+## Project Structure
 
 ```text
 localserver/
-│
 ├── src/
 │   ├── Main.java
 │   │
@@ -167,593 +171,372 @@ localserver/
 └── .gitignore
 ```
 
+This tree describes the intended project organization; individual features must be verified against the actual implementation.
+
 ---
 
-# Task Split
-
-## mmoulabbi — Core Server
-
-`mmoulabbi` is responsible for the core architecture and integration.
+## Core Components
 
 ### 1. NIO Server
 
-Files:
-
-```text
-src/server/
-├── HttpServer.java
-└── Connection.java
-```
+Files: `src/server/HttpServer.java`, `src/server/Connection.java`
 
 Responsibilities:
 
-* `Selector`
-* `ServerSocketChannel`
-* `SocketChannel`
-* `SelectionKey`
-* `OP_ACCEPT`
-* `OP_READ`
-* `OP_WRITE`
-* Multiple listening ports
-* Connection lifecycle
-* Non-blocking I/O
-* Single-thread event loop
-* Connection timeout handling
-* Preventing one client from crashing the server
+- `Selector`-based event handling
+- `ServerSocketChannel` and `SocketChannel` management
+- `SelectionKey` operations: `OP_ACCEPT`, `OP_READ`, and `OP_WRITE`
+- Multiple listening ports
+- Non-blocking client connections
+- Single-threaded event loop
+- Connection lifecycle and timeout handling
+- Graceful handling of client disconnects and network errors
 
 ### 2. HTTP Layer
 
-Files:
-
-```text
-src/http/
-├── HttpParser.java
-├── HttpRequest.java
-├── HttpResponse.java
-└── HttpStatus.java
-```
+Directory: `src/http/`
 
 Responsibilities:
 
-* HTTP request parsing
-* Request line
-* HTTP headers
-* Request body
-* `Content-Length`
-* Chunked request parsing
-* HTTP response serialization
-* HTTP status codes
-* Malformed request detection
+- HTTP request-line parsing
+- Header parsing and validation
+- Request-body handling
+- `Content-Length` support
+- Chunked transfer decoding
+- HTTP response serialization
+- HTTP status codes
+- Malformed-request detection
+- Request body size enforcement
 
 ### 3. Router
 
-Files:
-
-```text
-src/router/
-├── Router.java
-└── Route.java
-```
+Directory: `src/router/`
 
 Responsibilities:
 
-* Match request paths
-* Select the correct handler
-* Accepted HTTP methods
-* Route configuration
-* Redirects
-* Default route
-* Route priority
+- Request-path matching
+- Handler selection
+- HTTP method validation
+- Route configuration
+- Redirects
+- Default route handling
+- Route-priority rules
 
-### 4. Integration
+### 4. Static File Serving
 
-`mmoulabbi` is responsible for integrating Omar's modules with:
-
-```text
-HttpServer
-HttpParser
-Router
-Handlers
-Config
-Sessions
-```
-
-The core event loop should remain under one clear owner to avoid conflicts.
-
----
-
-# omar — Features and Server Functionality
-
-`omar` is responsible for implementing the application-level features.
-
-## 1. Static Files
-
-File:
-
-```text
-src/handler/StaticHandler.java
-```
+File: `src/handler/StaticHandler.java`
 
 Responsibilities:
 
-* Serve HTML
-* Serve text files
-* Serve CSS/JS
-* Basic MIME types
-* Directory handling
-* `index.html`
-* File existence checks
-* File permissions
-* Path traversal protection
+- Serve HTML, text, CSS, JavaScript, JSON, and supported image formats
+- Set appropriate MIME types
+- Resolve default files such as `index.html`
+- Handle directory requests according to configuration
+- Check file existence and access permissions
+- Prevent path traversal outside the document root
 
-Examples:
+Example requests:
 
-```text
+```http
 GET /
 GET /index.html
 GET /hello.txt
 GET /docs/
 ```
 
----
+### 5. File Uploads
 
-## 2. Uploads
-
-File:
-
-```text
-src/handler/UploadHandler.java
-```
+File: `src/handler/UploadHandler.java`
 
 Responsibilities:
 
-* POST uploads
-* Request body handling
-* Save uploaded files
-* Upload directory
-* Body size limits
-* `413 Payload Too Large`
-* `201 Created`
+- Handle POST uploads
+- Validate upload destinations
+- Enforce request-body size limits
+- Prevent path traversal and unintended overwrites
+- Handle upload failures safely
+- Return appropriate HTTP status codes, including `201 Created` when applicable
 
 Example:
 
-```text
+```http
 POST /upload
 ```
 
----
+The supported upload format and route must be documented according to the actual implementation.
 
-## 3. DELETE
+### 6. HTTP DELETE
 
-Handled as part of the handler layer.
+DELETE handling should:
 
-Responsibilities:
-
-```text
-DELETE /uploads/file.txt
-```
-
-Expected behavior:
-
-```text
-204 No Content
-```
-
-or:
-
-```text
-404 Not Found
-```
-
-when the file does not exist.
-
----
-
-## 4. Error Pages
-
-File:
-
-```text
-src/handler/ErrorHandler.java
-```
-
-Responsibilities:
-
-* 400
-* 403
-* 404
-* 405
-* 413
-* 500
-
-Use the files in:
-
-```text
-errors/
-```
-
----
-
-## 5. Configuration
-
-Files:
-
-```text
-src/config/
-├── Config.java
-├── ConfigLoader.java
-└── ServerConfig.java
-```
-
-Responsibilities:
-
-* Host
-* Ports
-* Document root
-* Routes
-* Accepted methods
-* Redirects
-* Error pages
-* Client body size limit
-* CGI extension
-* Directory listing
-* Default files
-* Multiple server configurations
-* Default server
-
-Configuration should be loaded from:
-
-```text
-config/server.conf
-```
-
----
-
-## 6. CGI
-
-File:
-
-```text
-src/handler/CGIHandler.java
-```
-
-Responsibilities:
-
-* Execute `.py` CGI scripts
-* Use `ProcessBuilder`
-* Pass the CGI script as the first argument
-* Set `PATH_INFO`
-* Handle CGI output
-* Return the CGI response to the HTTP client
+- Delete permitted files inside the document root
+- Reject directory deletion
+- Prevent path traversal and symbolic-link escapes
+- Return `204 No Content` after successful deletion
+- Return appropriate errors for missing or forbidden resources
+- Respect route method restrictions
 
 Example:
 
-```text
-GET /cgi-bin/hello.py
+```http
+DELETE /uploads/file.txt
 ```
 
----
+### 7. Error Handling
 
-## 7. Cookies and Sessions
+File: `src/handler/ErrorHandler.java`
 
-Files:
+Support custom error pages for:
 
-```text
-src/session/
-├── Cookie.java
-├── Session.java
-└── SessionManager.java
-```
+- `400 Bad Request`
+- `403 Forbidden`
+- `404 Not Found`
+- `405 Method Not Allowed`
+- `413 Payload Too Large`
+- `500 Internal Server Error`
+
+Error handling must include safe fallback responses if a custom page is missing or inaccessible.
+
+### 8. Server Configuration
+
+Directory: `src/config/`
+
+Configuration file: `config/server.conf`
+
+Intended configuration responsibilities:
+
+- Host and port settings
+- Document roots
+- Routes and accepted methods
+- Redirects
+- Error-page paths
+- Request body size limits
+- CGI extensions and execution settings
+- Directory-listing behavior
+- Default files
+- Multiple server configurations
+- Default-server selection
+
+Configuration parsing must validate invalid or missing values and report clear startup errors.
+
+### 9. CGI
+
+File: `src/handler/CGIHandler.java`
 
 Responsibilities:
 
-* Parse `Cookie`
-* Generate session IDs
-* Store sessions
-* `Set-Cookie`
-* Associate requests with sessions
-* Session expiration/cleanup
+- Execute supported CGI scripts using `ProcessBuilder`
+- Pass the script path as the first argument to the interpreter
+- Set CGI environment variables
+- Support `PATH_INFO`
+- Pass request bodies to the script's standard input when applicable
+- Parse CGI output and response headers
+- Handle process failures and timeouts
+- Prevent execution of scripts outside permitted directories
+
+Example:
+
+```http
+GET /cgi-bin/hello.py
+```
+
+CGI execution must not introduce arbitrary shell-command execution. Its effect on the single-threaded event loop must also be tested.
+
+### 10. Cookies and Sessions
+
+Directory: `src/session/`
+
+Responsibilities:
+
+- Parse incoming `Cookie` headers
+- Generate `Set-Cookie` response headers
+- Generate unpredictable session identifiers
+- Associate requests with server-side sessions
+- Store and retrieve session attributes
+- Expire and clean up inactive sessions
+- Prevent accidental session sharing between clients
+
+Session identifiers should be the only session data stored in the session cookie; session attributes remain server-side.
 
 ---
 
-# Shared Interface
+## Development Workflow
 
-Both developers should follow this basic flow:
+The project is developed and integrated by one developer. Work should be divided into small, independently verifiable tasks.
+
+For each task:
+
+1. Inspect the existing implementation before editing.
+2. Identify the smallest necessary change.
+3. Implement only the assigned feature.
+4. Compile the entire project.
+5. Run focused tests and relevant regression tests.
+6. Review changed files and any remaining limitations.
+7. Commit the verified change.
+8. Move to the next task only after verification.
+
+### Git workflow
+
+Use a separate feature branch for substantial work when appropriate.
+
+```powershell
+git checkout -b feat/feature-name
+```
+
+Review the working tree:
+
+```powershell
+git status
+git diff
+```
+
+Commit verified changes with descriptive messages:
+
+```powershell
+git add src
+git commit -m "feat: describe implemented feature"
+```
+
+Keep commits focused. Avoid committing unrelated changes or claiming functionality is complete without test evidence.
+
+---
+
+## Implementation Roadmap
+
+### Phase 1 — Core server
+
+- NIO event loop
+- Connection lifecycle
+- HTTP parsing and response serialization
+- Routing
+- Multiple listening ports
+- Timeouts and malformed-request handling
+
+### Phase 2 — HTTP functionality
+
+- Static files
+- GET, POST, and DELETE
+- Request-body size enforcement
+- Chunked requests
+- Custom error pages
+- File uploads
+
+### Phase 3 — Configuration
+
+- Configuration loading
+- Host and port settings
+- Document roots
+- Route definitions
+- Error pages and body limits
+- Redirects and default files
+- Multiple server configurations and default-server selection
+
+### Phase 4 — Advanced functionality
+
+- CGI execution
+- `PATH_INFO`
+- Cookies
+- Sessions
+- Directory listing
+
+### Phase 5 — Integration and verification
+
+- Regression testing
+- Malformed-request testing
+- Path traversal and filesystem security checks
+- Multiple-client testing
+- Stress testing
+- Memory and file-descriptor leak checks
+- Documentation and final requirements audit
+
+The roadmap is a planning guide, not a claim that all listed features are already implemented.
+
+---
+
+## Testing
+
+Basic PowerShell requests:
+
+```powershell
+curl.exe -i http://localhost:8080/
+curl.exe -i http://localhost:8080/index.html
+curl.exe -i http://localhost:8080/hello.txt
+curl.exe -i http://localhost:8080/docs/
+curl.exe -i -X POST http://localhost:8080/
+curl.exe -i -X DELETE http://localhost:8080/test.txt
+```
+
+The automated test suite should cover:
+
+- Valid and malformed HTTP requests
+- Supported and unsupported methods
+- Missing files and forbidden paths
+- Content-Length and chunked request bodies
+- Oversized requests
+- Upload success and failure cases
+- DELETE behavior
+- Custom error pages and fallback responses
+- CGI output, `PATH_INFO`, and process failures
+- Cookie parsing and session expiration
+- Multiple ports and server configurations
+- Connection timeouts and client disconnects
+- Concurrent clients and server responsiveness
+- Filesystem path traversal and symbolic-link attacks
+
+Run the project's required stress test using the expected target and test environment:
 
 ```text
-HttpRequest
-      │
-      ▼
-    Router
-      │
-      ▼
-   Handler
-      │
-      ▼
+siege -b [IP]:[PORT]
+```
+
+The project targets **99.5% availability** under the specified evaluation conditions. The result must be measured and recorded rather than assumed.
+
+---
+
+## Definition of Done
+
+- [ ] Server runs in one process with a single event-driven thread
+- [ ] Multiple listening ports work
+- [ ] HTTP/1.1 parsing and response serialization work
+- [ ] GET, POST, and DELETE work correctly
+- [ ] Static file serving works
+- [ ] File uploads work safely
+- [ ] Chunked requests work
+- [ ] Request body limits are enforced
+- [ ] Custom error pages work
+- [ ] Routing and redirects work
+- [ ] Configuration loading works
+- [ ] Multiple server configurations and default-server selection work
+- [ ] CGI execution and `PATH_INFO` work
+- [ ] Cookies and sessions work
+- [ ] Directory handling and listing meet the specification
+- [ ] Request timeouts work
+- [ ] Path traversal is blocked
+- [ ] Malformed requests do not crash the server
+- [ ] Stress testing is completed and results are recorded
+- [ ] Memory and file-descriptor leaks are checked
+- [ ] README and configuration documentation match the actual implementation
+
+## Main Principle
+
+Keep the architecture simple and responsibilities clear:
+
+```text
+NIO Server
+    |
+    v
+ HTTP Layer
+    |
+    v
+   Router
+    |
+    v
+  Handler
+    |
+    v
  HttpResponse
 ```
 
-Handlers should not directly control the NIO event loop.
+**One developer. One coherent architecture. Small changes, verified tests, and focused commits.**
 
-The server layer owns the connection and event loop.
-
-The HTTP layer owns HTTP parsing and serialization.
-
-The router decides where the request goes.
-
-Handlers perform the actual operation.
-
----
-
-# Git Workflow
-
-Do not work directly on `main`.
-
-Each developer creates a feature branch.
-
-### mmoulabbi
-
-```powershell
-git checkout -b feat/router
-```
-
-Example commits:
-
-```text
-feat: implement request router
-feat: integrate handlers with server
-fix: handle connection timeout
-```
-
-### omar
-
-```powershell
-git checkout -b feat/static-handler
-```
-
-Example commits:
-
-```text
-feat: implement static file handler
-feat: implement file uploads
-feat: implement CGI handler
-feat: implement server configuration
-```
-
-Before merging:
-
-```powershell
-git pull
-git checkout main
-git merge <feature-branch>
-```
-
----
-
-# Rules to Avoid Conflicts
-
-### 1. Do not modify the same core files simultaneously
-
-In particular:
-
-```text
-src/server/Connection.java
-src/server/HttpServer.java
-```
-
-are owned by `mmoulabbi`.
-
-If Omar needs changes there, discuss the required interface first.
-
-### 2. Keep modules independent
-
-Omar's handlers should receive an `HttpRequest` and return an `HttpResponse`.
-
-Do not make handlers directly manipulate `Selector` or `SocketChannel`.
-
-### 3. No external frameworks
-
-Do not add:
-
-* Netty
-* Jetty
-* Grizzly
-* Spring
-* asynchronous frameworks
-* thread pools
-
-The project must remain based on Java NIO.
-
-### 4. No unnecessary features
-
-Focus on mandatory requirements first.
-
-Do not spend time on:
-
-* HTTP/2
-* HTTPS/TLS
-* WebSockets
-* authentication
-* database
-* compression
-* caching
-* admin dashboard
-* second CGI type
-
-until every mandatory requirement works.
-
----
-
-# Development Order
-
-## Phase 1 — Core
-
-**mmoulabbi**
-
-```text
-NIO server
-    ↓
-HTTP parser
-    ↓
-HTTP response
-    ↓
-Router
-```
-
-## Phase 2 — Basic Web Server
-
-**omar**
-
-```text
-Static files
-    ↓
-Error pages
-    ↓
-POST/uploads
-    ↓
-DELETE
-```
-
-## Phase 3 — Configuration
-
-**omar + mmoulabbi**
-
-```text
-server.conf
-    ↓
-ConfigLoader
-    ↓
-ServerConfig
-    ↓
-Router / Server
-```
-
-## Phase 4 — Advanced Features
-
-**omar**
-
-```text
-CGI
-Cookies
-Sessions
-```
-
-**mmoulabbi**
-
-```text
-NIO integration
-Timeouts
-Connection lifecycle
-Error/crash protection
-```
-
-## Phase 5 — Integration
-
-**Both**
-
-Test:
-
-```text
-GET
-POST
-DELETE
-Static files
-Uploads
-Chunked requests
-CGI
-PATH_INFO
-Cookies
-Sessions
-Redirects
-Errors
-Multiple ports
-Multiple servers
-Directory handling
-Body limits
-Malformed requests
-Path traversal
-Timeouts
-```
-
----
-
-# Testing
-
-Basic PowerShell tests:
-
-```powershell
-curl.exe http://localhost:8080/
-curl.exe http://localhost:8080/index.html
-curl.exe http://localhost:8080/hello.txt
-curl.exe http://localhost:8080/docs/
-curl.exe -X POST http://localhost:8080/
-curl.exe -X DELETE http://localhost:8080/test.txt
-```
-
-The server must remain alive after:
-
-* malformed requests
-* invalid paths
-* unsupported methods
-* oversized bodies
-* missing files
-* client disconnects
-* multiple simultaneous connections
-
----
-
-# Definition of Done
-
-The project is considered complete when:
-
-* [ ] Server runs with one process
-* [ ] Server uses one event-driven thread
-* [ ] Multiple ports work
-* [ ] HTTP/1.1 works
-* [ ] GET works
-* [ ] POST works
-* [ ] DELETE works
-* [ ] Static files work
-* [ ] Uploads work
-* [ ] Chunked requests work
-* [ ] Error pages work
-* [ ] Routing works
-* [ ] Configuration works
-* [ ] Multiple server configurations work
-* [ ] Default server works
-* [ ] CGI works
-* [ ] `PATH_INFO` works
-* [ ] Cookies work
-* [ ] Sessions work
-* [ ] Request timeouts work
-* [ ] Path traversal is blocked
-* [ ] Server does not crash on malformed requests
-* [ ] Stress testing completed
-* [ ] Memory/file-descriptor leaks checked
-* [ ] README/documentation completed
-
----
-
-# Main Principle
-
-Keep the architecture simple:
-
-```text
-        NIO
-         │
-         ▼
-       HTTP
-         │
-         ▼
-      Router
-         │
-         ▼
-      Handler
-         │
-         ▼
-     Response
-```
-
-**mmoulabbi owns the core.
-omar owns the features.
-Both own testing and final integration.**
+Prioritize mandatory requirements and reliability before optional features.
