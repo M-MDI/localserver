@@ -6,7 +6,9 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class HttpParser {
-    public static HttpRequest parse(ByteBuffer buffer) {
+    private static final int MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
+
+    public static HttpRequest parse(ByteBuffer buffer) throws PayloadTooLargeException {
         HttpRequest request = new HttpRequest();
         String requestLine = readLine(buffer);
         if (requestLine == null || requestLine.isEmpty()) {
@@ -40,21 +42,28 @@ public class HttpParser {
         } else if (headers.containsKey("Content-Length")) {
             try {
                 int contentLength = Integer.parseInt(headers.get("Content-Length"));
+                if (contentLength < 0) {
+                    throw new PayloadTooLargeException();
+                }
+                if (contentLength > MAX_BODY_SIZE) {
+                    throw new PayloadTooLargeException();
+                }
                 if (contentLength > 0 && buffer.remaining() >= contentLength) {
                     byte[] bodyBytes = new byte[contentLength];
                     buffer.get(bodyBytes);
                     request.setBody(new String(bodyBytes, StandardCharsets.UTF_8));
                 }
             } catch (NumberFormatException e) {
-                // Invalid content length
+                // Invalid content length - treat as malformed
             }
         }
 
         return request;
     }
 
-    private static String parseChunkedBody(ByteBuffer buffer) {
+    private static String parseChunkedBody(ByteBuffer buffer) throws PayloadTooLargeException {
         StringBuilder body = new StringBuilder();
+        int totalSize = 0;
         while (true) {
             String hexSize = readLine(buffer);
             if (hexSize == null || hexSize.isEmpty()) {
@@ -66,11 +75,16 @@ public class HttpParser {
                     readLine(buffer); // Consume trailing \r\n
                     break;
                 }
-                
+
+                if (totalSize + chunkSize > MAX_BODY_SIZE) {
+                    throw new PayloadTooLargeException();
+                }
+
                 if (buffer.remaining() >= chunkSize) {
                     byte[] chunk = new byte[chunkSize];
                     buffer.get(chunk);
                     body.append(new String(chunk, StandardCharsets.UTF_8));
+                    totalSize += chunkSize;
                     readLine(buffer); // Consume trailing \r\n after chunk data
                 } else {
                     break; // Wait for more data

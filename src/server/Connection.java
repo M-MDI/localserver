@@ -6,6 +6,7 @@ import java.nio.channels.SocketChannel;
 import http.HttpParser;
 import http.HttpRequest;
 import http.HttpResponse;
+import http.PayloadTooLargeException;
 import handler.StaticHandler;
 import router.Route;
 import router.Router;
@@ -45,6 +46,9 @@ public class Connection {
         HttpRequest request = null;
         try {
             request = HttpParser.parse(readBuffer);
+        } catch (PayloadTooLargeException e) {
+            writeBuffer = createErrorResponse(413, "Payload Too Large");
+            return;
         } catch (Exception e) {
             // Protect against malformed requests crashing parser
         }
