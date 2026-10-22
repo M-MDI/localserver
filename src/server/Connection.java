@@ -12,6 +12,9 @@ import handler.UploadHandler;
 import handler.CGIHandler;
 import router.Route;
 import router.Router;
+import session.SessionManager;
+import session.Session;
+import session.Cookie;
 
 public class Connection {
     private final SocketChannel channel;
@@ -19,6 +22,7 @@ public class Connection {
     private ByteBuffer writeBuffer;
     private long lastActiveTime;
     private final String documentRoot;
+    private static final SessionManager sessionManager = new SessionManager();
 
     public Connection(SocketChannel channel, String documentRoot) {
         this.channel = channel;
@@ -53,6 +57,11 @@ public class Connection {
         if (request == null) {
             writeBuffer = createErrorResponse(400, "Bad Request");
             return;
+        }
+
+        // Periodically cleanup expired sessions (every 100 requests approximately)
+        if (Math.random() < 0.01) {
+            sessionManager.cleanupExpiredSessions();
         }
 
         Router router = new Router();
@@ -111,6 +120,10 @@ public class Connection {
 
     public long getLastActiveTime() {
         return lastActiveTime;
+    }
+
+    public static SessionManager getSessionManager() {
+        return sessionManager;
     }
 
     private ByteBuffer createErrorResponse(int statusCode, String statusText) {

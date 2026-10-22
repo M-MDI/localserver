@@ -2,6 +2,7 @@ package http;
 
 import java.util.HashMap;
 import java.util.Map;
+import session.Cookie;
 
 public class HttpRequest {
     private String method;
@@ -9,9 +10,11 @@ public class HttpRequest {
     private String version;
     private Map<String, String> headers;
     private String body;
+    private Map<String, String> cookies;
 
     public HttpRequest() {
         this.headers = new HashMap<>();
+        this.cookies = new HashMap<>();
     }
 
     public String getMethod() {
@@ -52,5 +55,24 @@ public class HttpRequest {
 
     public void setBody(String body) {
         this.body = body;
+    }
+
+    public Map<String, String> getCookies() {
+        return cookies;
+    }
+
+    public void setCookies(Map<String, String> cookies) {
+        this.cookies = cookies;
+    }
+
+    public String getCookie(String name) {
+        return cookies.get(name);
+    }
+
+    public void parseCookies() {
+        String cookieHeader = headers.get("Cookie");
+        if (cookieHeader != null) {
+            this.cookies = Cookie.parseCookieHeader(cookieHeader);
+        }
     }
 }

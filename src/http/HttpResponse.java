@@ -1,17 +1,21 @@
 package http;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class HttpResponse {
     private int statusCode;
     private String statusText;
     private Map<String, String> headers;
+    private List<String> setCookieHeaders;
     private byte[] body;
 
     public HttpResponse() {
         this.headers = new HashMap<>();
+        this.setCookieHeaders = new ArrayList<>();
     }
 
     public int getStatusCode() {
@@ -50,12 +54,20 @@ public class HttpResponse {
         headers.put(name, value);
     }
 
+    public void addSetCookieHeader(String setCookieValue) {
+        setCookieHeaders.add(setCookieValue);
+    }
+
     public ByteBuffer toByteBuffer() {
         StringBuilder headerBuilder = new StringBuilder();
         headerBuilder.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
 
         for (Map.Entry<String, String> entry : headers.entrySet()) {
             headerBuilder.append(entry.getKey()).append(": ").append(entry.getValue()).append("\r\n");
+        }
+
+        for (String setCookie : setCookieHeaders) {
+            headerBuilder.append("Set-Cookie: ").append(setCookie).append("\r\n");
         }
 
         headerBuilder.append("\r\n");

@@ -35,6 +35,7 @@ public class HttpParser {
             }
         }
         request.setHeaders(headers);
+        request.parseCookies();
 
         // Parse Body
         if (headers.containsKey("Transfer-Encoding") && headers.get("Transfer-Encoding").contains("chunked")) {
