@@ -9,13 +9,15 @@ import java.util.Set;
 public class HttpServer {
     private final int[] ports;
     private final String documentRoot;
+    private final config.ServerConfig config;
     private Selector selector;
     private volatile boolean running;
     private static final long CONNECTION_TIMEOUT_MS = 30000;
 
-    public HttpServer(int[] ports, String documentRoot) {
+    public HttpServer(int[] ports, String documentRoot, config.ServerConfig config) {
         this.ports = ports;
         this.documentRoot = documentRoot;
+        this.config = config;
     }
 
     public void start() throws IOException {
@@ -72,7 +74,7 @@ public class HttpServer {
 
             if (clientChannel != null) {
                 clientChannel.configureBlocking(false);
-                Connection connection = new Connection(clientChannel, documentRoot);
+                Connection connection = new Connection(clientChannel, documentRoot, config);
                 clientChannel.register(selector, SelectionKey.OP_READ, connection);
             }
         } catch (IOException e) {

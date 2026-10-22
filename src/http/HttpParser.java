@@ -6,7 +6,15 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class HttpParser {
-    private static final int MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
+    private static int MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
+
+    public static void setMaxBodySize(int size) {
+        MAX_BODY_SIZE = size;
+    }
+
+    public static int getMaxBodySize() {
+        return MAX_BODY_SIZE;
+    }
 
     public static HttpRequest parse(ByteBuffer buffer) throws PayloadTooLargeException {
         HttpRequest request = new HttpRequest();

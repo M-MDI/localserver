@@ -13,8 +13,7 @@ import handler.CGIHandler;
 import router.Route;
 import router.Router;
 import session.SessionManager;
-import session.Session;
-import session.Cookie;
+import config.ServerConfig;
 
 public class Connection {
     private final SocketChannel channel;
@@ -22,14 +21,16 @@ public class Connection {
     private ByteBuffer writeBuffer;
     private long lastActiveTime;
     private final String documentRoot;
+    private final ServerConfig config;
     private static final SessionManager sessionManager = new SessionManager();
 
-    public Connection(SocketChannel channel, String documentRoot) {
+    public Connection(SocketChannel channel, String documentRoot, ServerConfig config) {
         this.channel = channel;
         this.readBuffer = ByteBuffer.allocate(8192);
         this.writeBuffer = null;
         this.lastActiveTime = System.currentTimeMillis();
         this.documentRoot = documentRoot;
+        this.config = config;
     }
 
     public boolean read() throws IOException {
@@ -127,6 +128,29 @@ public class Connection {
     }
 
     private ByteBuffer createErrorResponse(int statusCode, String statusText) {
+        String errorPagePath = config.getErrorPages().get(statusCode);
+        if (errorPagePath != null) {
+            try {
+                java.nio.file.Path errorFile = java.nio.file.Paths.get(errorPagePath).toAbsolutePath().normalize();
+                if (java.nio.file.Files.exists(errorFile) && java.nio.file.Files.isRegularFile(errorFile)) {
+                    byte[] content = java.nio.file.Files.readAllBytes(errorFile);
+                    String response = "HTTP/1.1 " + statusCode + " " + statusText + "\r\n" +
+                            "Content-Type: text/html; charset=UTF-8\r\n" +
+                            "Content-Length: " + content.length + "\r\n" +
+                            "Connection: close\r\n" +
+                            "\r\n";
+                    byte[] headerBytes = response.getBytes();
+                    java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(headerBytes.length + content.length);
+                    buffer.put(headerBytes);
+                    buffer.put(content);
+                    buffer.flip();
+                    return buffer;
+                }
+            } catch (java.io.IOException e) {
+                // Fall back to default error
+            }
+        }
+        
         String body = statusCode + " " + statusText;
         String response = "HTTP/1.1 " + statusCode + " " + statusText + "\r\n" +
                 "Content-Type: text/plain\r\n" +

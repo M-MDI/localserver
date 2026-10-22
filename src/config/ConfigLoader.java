@@ -11,6 +11,7 @@ public class ConfigLoader {
     private static final String DEFAULT_CONFIG_PATH = "config/server.conf";
     private static final int DEFAULT_PORT = 65432;
     private static final String DEFAULT_DOCUMENT_ROOT = "./www";
+    private static final int DEFAULT_MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
 
     public static ServerConfig load() throws IOException {
         return load(DEFAULT_CONFIG_PATH);
@@ -23,6 +24,7 @@ public class ConfigLoader {
         }
 
         List<String> lines = Files.readAllLines(path);
+        ServerConfig config = new ServerConfig();
         List<Integer> ports = new ArrayList<>();
         String documentRoot = null;
 
@@ -52,6 +54,29 @@ public class ConfigLoader {
                 }
             } else if (key.equalsIgnoreCase("document_root")) {
                 documentRoot = value;
+            } else if (key.equalsIgnoreCase("max_body_size")) {
+                try {
+                    int size = parseSize(value);
+                    if (size <= 0) {
+                        throw new IOException("Invalid max_body_size: " + value + " (must be positive)");
+                    }
+                    config.setMaxBodySize(size);
+                } catch (NumberFormatException e) {
+                    throw new IOException("Invalid max_body_size: " + value);
+                }
+            } else if (key.startsWith("error_page")) {
+                String[] keyParts = key.split("\\s+");
+                if (keyParts.length == 2) {
+                    try {
+                        int statusCode = Integer.parseInt(keyParts[1]);
+                        if (statusCode < 100 || statusCode > 599) {
+                            throw new IOException("Invalid error page status code: " + statusCode);
+                        }
+                        config.setErrorPage(statusCode, value);
+                    } catch (NumberFormatException e) {
+                        throw new IOException("Invalid error page status code: " + keyParts[1]);
+                    }
+                }
             }
         }
 
@@ -71,6 +96,21 @@ public class ConfigLoader {
             throw new IOException("Document root is not a directory: " + resolvedRoot);
         }
 
-        return new ServerConfig(ports, resolvedRoot.toString());
+        config.setPorts(ports);
+        config.setDocumentRoot(resolvedRoot.toString());
+
+        return config;
+    }
+
+    private static int parseSize(String value) {
+        value = value.toLowerCase().trim();
+        if (value.endsWith("k") || value.endsWith("kb")) {
+            return Integer.parseInt(value.replaceAll("[kkmgb]", "")) * 1024;
+        } else if (value.endsWith("m") || value.endsWith("mb")) {
+            return Integer.parseInt(value.replaceAll("[kkmgb]", "")) * 1024 * 1024;
+        } else if (value.endsWith("g") || value.endsWith("gb")) {
+            return Integer.parseInt(value.replaceAll("[kkmgb]", "")) * 1024 * 1024 * 1024;
+        }
+        return Integer.parseInt(value);
     }
 }
