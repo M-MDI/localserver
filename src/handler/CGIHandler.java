@@ -2,6 +2,7 @@ package handler;
 
 import http.HttpRequest;
 import http.HttpResponse;
+import config.ServerConfig;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -17,10 +18,12 @@ import java.util.Map;
 
 public class CGIHandler {
     private final String cgiDirectory;
+    private final ServerConfig config;
     private static final long CGI_TIMEOUT_MS = 5000; // 5 second timeout
 
-    public CGIHandler(String cgiDirectory) {
+    public CGIHandler(String cgiDirectory, ServerConfig config) {
         this.cgiDirectory = cgiDirectory;
+        this.config = config;
     }
 
     public HttpResponse handle(HttpRequest request) {
@@ -259,6 +262,26 @@ public class CGIHandler {
     }
 
     private HttpResponse createErrorResponse(int statusCode, String statusText) {
+        String errorPagePath = config.getErrorPages().get(statusCode);
+        if (errorPagePath != null) {
+            try {
+                Path errorFile = Paths.get(errorPagePath).toAbsolutePath().normalize();
+                if (Files.exists(errorFile) && Files.isRegularFile(errorFile)) {
+                    byte[] content = Files.readAllBytes(errorFile);
+                    HttpResponse response = new HttpResponse();
+                    response.setStatusCode(statusCode);
+                    response.setStatusText(statusText);
+                    response.setBody(content);
+                    response.setHeader("Content-Type", "text/html; charset=UTF-8");
+                    response.setHeader("Content-Length", String.valueOf(content.length));
+                    response.setHeader("Connection", "close");
+                    return response;
+                }
+            } catch (IOException e) {
+                // Fall back to default error
+            }
+        }
+        
         HttpResponse response = new HttpResponse();
         response.setStatusCode(statusCode);
         response.setStatusText(statusText);

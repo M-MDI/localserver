@@ -2,6 +2,7 @@ package handler;
 
 import http.HttpRequest;
 import http.HttpResponse;
+import config.ServerConfig;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -9,9 +10,11 @@ import java.nio.file.Paths;
 
 public class StaticHandler {
     private final String documentRoot;
+    private final ServerConfig config;
 
-    public StaticHandler(String documentRoot) {
+    public StaticHandler(String documentRoot, ServerConfig config) {
         this.documentRoot = documentRoot;
+        this.config = config;
     }
 
     public HttpResponse handle(HttpRequest request) {
@@ -157,6 +160,26 @@ public class StaticHandler {
     }
 
     private HttpResponse createErrorResponse(int statusCode, String statusText) {
+        String errorPagePath = config.getErrorPages().get(statusCode);
+        if (errorPagePath != null) {
+            try {
+                Path errorFile = Paths.get(errorPagePath).toAbsolutePath().normalize();
+                if (Files.exists(errorFile) && Files.isRegularFile(errorFile)) {
+                    byte[] content = Files.readAllBytes(errorFile);
+                    HttpResponse response = new HttpResponse();
+                    response.setStatusCode(statusCode);
+                    response.setStatusText(statusText);
+                    response.setBody(content);
+                    response.setHeader("Content-Type", "text/html; charset=UTF-8");
+                    response.setHeader("Content-Length", String.valueOf(content.length));
+                    response.setHeader("Connection", "close");
+                    return response;
+                }
+            } catch (IOException e) {
+                // Fall back to default error
+            }
+        }
+        
         HttpResponse response = new HttpResponse();
         response.setStatusCode(statusCode);
         response.setStatusText(statusText);

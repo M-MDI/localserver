@@ -2,6 +2,7 @@ package handler;
 
 import http.HttpRequest;
 import http.HttpResponse;
+import config.ServerConfig;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -9,9 +10,11 @@ import java.nio.file.Paths;
 
 public class UploadHandler {
     private final String uploadDirectory;
+    private final ServerConfig config;
 
-    public UploadHandler(String uploadDirectory) {
+    public UploadHandler(String uploadDirectory, ServerConfig config) {
         this.uploadDirectory = uploadDirectory;
+        this.config = config;
     }
 
     public HttpResponse handle(HttpRequest request) {
@@ -70,6 +73,26 @@ public class UploadHandler {
     }
 
     private HttpResponse createErrorResponse(int statusCode, String statusText) {
+        String errorPagePath = config.getErrorPages().get(statusCode);
+        if (errorPagePath != null) {
+            try {
+                Path errorFile = Paths.get(errorPagePath).toAbsolutePath().normalize();
+                if (Files.exists(errorFile) && Files.isRegularFile(errorFile)) {
+                    byte[] content = Files.readAllBytes(errorFile);
+                    HttpResponse response = new HttpResponse();
+                    response.setStatusCode(statusCode);
+                    response.setStatusText(statusText);
+                    response.setBody(content);
+                    response.setHeader("Content-Type", "text/html; charset=UTF-8");
+                    response.setHeader("Content-Length", String.valueOf(content.length));
+                    response.setHeader("Connection", "close");
+                    return response;
+                }
+            } catch (IOException e) {
+                // Fall back to default error
+            }
+        }
+        
         HttpResponse response = new HttpResponse();
         response.setStatusCode(statusCode);
         response.setStatusText(statusText);

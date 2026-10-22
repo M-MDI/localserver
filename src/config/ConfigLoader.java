@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class ConfigLoader {
     private static final String DEFAULT_CONFIG_PATH = "config/server.conf";
@@ -98,6 +99,18 @@ public class ConfigLoader {
 
         config.setPorts(ports);
         config.setDocumentRoot(resolvedRoot.toString());
+
+        // Resolve error page paths relative to project directory (current working directory)
+        Path projectDir = Paths.get(".").toAbsolutePath().normalize();
+        for (Map.Entry<Integer, String> entry : config.getErrorPages().entrySet()) {
+            Path errorPath = Paths.get(entry.getValue());
+            if (!errorPath.isAbsolute()) {
+                errorPath = projectDir.resolve(errorPath).toAbsolutePath().normalize();
+            } else {
+                errorPath = errorPath.toAbsolutePath().normalize();
+            }
+            config.setErrorPage(entry.getKey(), errorPath.toString());
+        }
 
         return config;
     }

@@ -86,45 +86,21 @@ public class Connection {
             } else if (route.isRedirect()) {
                 writeBuffer = createRedirectResponse(route.getRedirectPath());
             } else if (request.getPath().startsWith("/upload") && "POST".equalsIgnoreCase(request.getMethod())) {
-                UploadHandler uploadHandler = new UploadHandler(uploadDir);
+                UploadHandler uploadHandler = new UploadHandler(uploadDir, config);
                 HttpResponse response = uploadHandler.handle(request);
                 writeBuffer = response.toByteBuffer();
             } else if (request.getPath().startsWith("/cgi-bin")) {
-                CGIHandler cgiHandler = new CGIHandler(cgiDir);
+                CGIHandler cgiHandler = new CGIHandler(cgiDir, config);
                 HttpResponse response = cgiHandler.handle(request);
                 writeBuffer = response.toByteBuffer();
             } else {
-                StaticHandler handler = new StaticHandler(route.getDocumentRoot());
+                StaticHandler handler = new StaticHandler(route.getDocumentRoot(), config);
                 HttpResponse response = handler.handle(request);
                 writeBuffer = response.toByteBuffer();
             }
         } else {
             writeBuffer = createErrorResponse(404, "Not Found");
         }
-    }
-
-    public boolean write() throws IOException {
-        lastActiveTime = System.currentTimeMillis();
-        if (writeBuffer == null) {
-            return true;
-        }
-        
-        channel.write(writeBuffer);
-        return !writeBuffer.hasRemaining(); // Returns true when fully written
-    }
-
-    public void close() throws IOException {
-        if (channel != null && channel.isOpen()) {
-            channel.close();
-        }
-    }
-
-    public long getLastActiveTime() {
-        return lastActiveTime;
-    }
-
-    public static SessionManager getSessionManager() {
-        return sessionManager;
     }
 
     private ByteBuffer createErrorResponse(int statusCode, String statusText) {
@@ -159,6 +135,30 @@ public class Connection {
                 "\r\n" +
                 body;
         return ByteBuffer.wrap(response.getBytes());
+    }
+
+    public boolean write() throws IOException {
+        lastActiveTime = System.currentTimeMillis();
+        if (writeBuffer == null) {
+            return true;
+        }
+        
+        channel.write(writeBuffer);
+        return !writeBuffer.hasRemaining(); // Returns true when fully written
+    }
+
+    public void close() throws IOException {
+        if (channel != null && channel.isOpen()) {
+            channel.close();
+        }
+    }
+
+    public long getLastActiveTime() {
+        return lastActiveTime;
+    }
+
+    public static SessionManager getSessionManager() {
+        return sessionManager;
     }
 
     private ByteBuffer createRedirectResponse(String location) {
