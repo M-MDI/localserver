@@ -78,6 +78,14 @@ public class ConfigLoader {
                         throw new IOException("Invalid error page status code: " + keyParts[1]);
                     }
                 }
+            } else if (key.equalsIgnoreCase("directory_listing")) {
+                if (value.equalsIgnoreCase("on") || value.equalsIgnoreCase("true") || value.equals("1")) {
+                    config.setDirectoryListing(true);
+                } else if (value.equalsIgnoreCase("off") || value.equalsIgnoreCase("false") || value.equals("0")) {
+                    config.setDirectoryListing(false);
+                } else {
+                    throw new IOException("Invalid directory_listing value: " + value + " (must be on/off)");
+                }
             }
         }
 

@@ -7,6 +7,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.stream.Stream;
 
 public class StaticHandler {
     private final String documentRoot;
@@ -26,10 +29,6 @@ public class StaticHandler {
         String requestPath = request.getPath();
         if (requestPath == null || requestPath.isEmpty()) {
             requestPath = "/";
-        }
-
-        if (requestPath.contains("..")) {
-            return createErrorResponse(403, "Forbidden");
         }
 
         Path resolvedPath = resolvePath(requestPath);
@@ -61,7 +60,11 @@ public class StaticHandler {
                 if (Files.exists(indexPath) && Files.isReadable(indexPath)) {
                     return serveFile(indexPath);
                 } else {
-                    return createErrorResponse(403, "Forbidden");
+                    if (config.isDirectoryListing()) {
+                        return generateDirectoryListing(resolvedPath);
+                    } else {
+                        return createErrorResponse(403, "Forbidden");
+                    }
                 }
             } else {
                 return serveFile(resolvedPath);
@@ -98,10 +101,6 @@ public class StaticHandler {
  
     private Path resolvePath(String requestPath) {
         try {
-            if (requestPath.contains("..")) {
-                return null;
-            }
-
             String normalizedPath = requestPath.replace('\\', '/');
             if (normalizedPath.startsWith("/")) {
                 normalizedPath = normalizedPath.substring(1);
@@ -157,6 +156,114 @@ public class StaticHandler {
         } else {
             return "application/octet-stream";
         }
+    }
+
+    private HttpResponse generateDirectoryListing(Path dirPath) throws IOException {
+        StringBuilder html = new StringBuilder();
+        String relativePath = getRelativePath(dirPath);
+        
+        html.append("<!DOCTYPE html>\n");
+        html.append("<html>\n");
+        html.append("<head>\n");
+        html.append("<title>Index of ");
+        html.append(escapeHtml(relativePath.isEmpty() ? "/" : relativePath));
+        html.append("</title>\n");
+        html.append("<style>\n");
+        html.append("body { font-family: Arial, sans-serif; margin: 40px; }\n");
+        html.append("h1 { color: #333; }\n");
+        html.append("table { border-collapse: collapse; width: 100%; }\n");
+        html.append("th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }\n");
+        html.append("th { background-color: #f2f2f2; }\n");
+        html.append("a { color: #0066cc; text-decoration: none; }\n");
+        html.append("a:hover { text-decoration: underline; }\n");
+        html.append("</style>\n");
+        html.append("</head>\n");
+        html.append("<body>\n");
+        html.append("<h1>Index of ");
+        html.append(escapeHtml(relativePath.isEmpty() ? "/" : relativePath));
+        html.append("</h1>\n");
+        html.append("<table>\n");
+        html.append("<tr><th>Name</th><th>Type</th></tr>\n");
+        
+        // Add parent directory link if not at document root
+        if (!relativePath.isEmpty()) {
+            String parentPath = getParentPath(relativePath);
+            html.append("<tr><td><a href=\"");
+            html.append(escapeHtml(parentPath));
+            html.append("\">../</a></td><td>Directory</td></tr>\n");
+        }
+        
+        try (Stream<Path> stream = Files.list(dirPath)) {
+            stream.sorted()
+                  .forEach(path -> {
+                      String name = path.getFileName().toString();
+                      String encodedName = URLEncoder.encode(name, StandardCharsets.UTF_8);
+                      boolean isDirectory = Files.isDirectory(path);
+                      
+                      html.append("<tr><td><a href=\"");
+                      html.append(escapeHtml(encodedName));
+                      if (isDirectory) {
+                          html.append("/");
+                      }
+                      html.append("\">");
+                      html.append(escapeHtml(name));
+                      if (isDirectory) {
+                          html.append("/");
+                      }
+                      html.append("</a></td><td>");
+                      html.append(isDirectory ? "Directory" : "File");
+                      html.append("</td></tr>\n");
+                  });
+        }
+        
+        html.append("</table>\n");
+        html.append("</body>\n");
+        html.append("</html>\n");
+        
+        byte[] content = html.toString().getBytes(StandardCharsets.UTF_8);
+        HttpResponse response = new HttpResponse();
+        response.setStatusCode(200);
+        response.setStatusText("OK");
+        response.setBody(content);
+        response.setHeader("Content-Type", "text/html; charset=UTF-8");
+        response.setHeader("Content-Length", String.valueOf(content.length));
+        response.setHeader("Connection", "close");
+        return response;
+    }
+
+    private String getRelativePath(Path fullPath) {
+        Path rootPath = Paths.get(documentRoot).toAbsolutePath().normalize();
+        Path relative = rootPath.relativize(fullPath).normalize();
+        String result = relative.toString().replace("\\", "/");
+        if (result.equals(".")) {
+            return "";
+        }
+        return result;
+    }
+
+    private String getParentPath(String relativePath) {
+        if (relativePath.isEmpty() || relativePath.equals("/")) {
+            return "/";
+        }
+        int lastSlash = relativePath.lastIndexOf('/');
+        if (lastSlash == -1) {
+            return "/";
+        }
+        if (lastSlash == 0) {
+            return "/";
+        }
+        return relativePath.substring(0, lastSlash);
+    }
+
+    private String escapeHtml(String input) {
+        if (input == null) {
+            return "";
+        }
+        return input.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("\"", "&quot;")
+                   .replace("'", "&#39;");
     }
 
     private HttpResponse createErrorResponse(int statusCode, String statusText) {

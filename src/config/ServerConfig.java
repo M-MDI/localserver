@@ -10,11 +10,13 @@ public class ServerConfig {
     private String documentRoot;
     private int maxBodySize;
     private Map<Integer, String> errorPages;
+    private boolean directoryListing;
 
     public ServerConfig() {
         this.ports = new ArrayList<>();
         this.maxBodySize = 10 * 1024 * 1024; // 10 MB default
         this.errorPages = new HashMap<>();
+        this.directoryListing = false; // off by default
     }
 
     public List<Integer> getPorts() {
@@ -47,5 +49,13 @@ public class ServerConfig {
 
     public void setErrorPage(int statusCode, String path) {
         errorPages.put(statusCode, path);
+    }
+
+    public boolean isDirectoryListing() {
+        return directoryListing;
+    }
+
+    public void setDirectoryListing(boolean directoryListing) {
+        this.directoryListing = directoryListing;
     }
 }

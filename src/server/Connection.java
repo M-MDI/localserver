@@ -78,6 +78,12 @@ public class Connection {
         Route cgiRoute = new Route("/cgi-bin", cgiDir);
         router.addRoute(cgiRoute);
 
+        // Reject paths with ".." to prevent path traversal attacks
+        if (request.getPath().contains("..")) {
+            writeBuffer = createErrorResponse(403, "Forbidden");
+            return;
+        }
+
         Route route = router.resolve(request.getPath());
         if (route != null) {
             // Check method
