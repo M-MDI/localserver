@@ -86,6 +86,9 @@ public class UploadHandler {
                     response.setHeader("Content-Type", "text/html; charset=UTF-8");
                     response.setHeader("Content-Length", String.valueOf(content.length));
                     response.setHeader("Connection", "close");
+                    if (statusCode == 405) {
+                        response.setHeader("Allow", "POST");
+                    }
                     return response;
                 }
             } catch (IOException e) {
@@ -101,6 +104,9 @@ public class UploadHandler {
         response.setHeader("Content-Type", "text/plain");
         response.setHeader("Content-Length", String.valueOf(body.length()));
         response.setHeader("Connection", "close");
+        if (statusCode == 405) {
+            response.setHeader("Allow", "POST");
+        }
         return response;
     }
 }

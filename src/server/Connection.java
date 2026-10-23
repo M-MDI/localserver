@@ -119,8 +119,11 @@ public class Connection {
                     String response = "HTTP/1.1 " + statusCode + " " + statusText + "\r\n" +
                             "Content-Type: text/html; charset=UTF-8\r\n" +
                             "Content-Length: " + content.length + "\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n";
+                            "Connection: close\r\n";
+                    if (statusCode == 405) {
+                        response += "Allow: GET, DELETE\r\n";
+                    }
+                    response += "\r\n";
                     byte[] headerBytes = response.getBytes();
                     java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(headerBytes.length + content.length);
                     buffer.put(headerBytes);
@@ -137,9 +140,11 @@ public class Connection {
         String response = "HTTP/1.1 " + statusCode + " " + statusText + "\r\n" +
                 "Content-Type: text/plain\r\n" +
                 "Content-Length: " + body.length() + "\r\n" +
-                "Connection: close\r\n" +
-                "\r\n" +
-                body;
+                "Connection: close\r\n";
+        if (statusCode == 405) {
+            response += "Allow: GET, DELETE\r\n";
+        }
+        response += "\r\n" + body;
         return ByteBuffer.wrap(response.getBytes());
     }
 
