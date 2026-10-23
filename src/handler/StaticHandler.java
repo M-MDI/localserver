@@ -106,6 +106,12 @@ public class StaticHandler {
                 normalizedPath = normalizedPath.substring(1);
             }
 
+            // Strip query string if present
+            int queryIndex = normalizedPath.indexOf('?');
+            if (queryIndex >= 0) {
+                normalizedPath = normalizedPath.substring(0, queryIndex);
+            }
+
             if (normalizedPath.isEmpty()) {
                 normalizedPath = ".";
             }

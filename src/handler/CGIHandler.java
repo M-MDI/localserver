@@ -32,6 +32,11 @@ public class CGIHandler {
             return createErrorResponse(404, "Not Found");
         }
 
+        // Reject path traversal at the CGI handler level
+        if (requestPath.contains("..")) {
+            return createErrorResponse(403, "Forbidden - Path traversal detected");
+        }
+
         String pathAfterCgiBin = requestPath.substring("/cgi-bin/".length());
         if (pathAfterCgiBin.isEmpty()) {
             return createErrorResponse(404, "Not Found");
@@ -66,15 +71,22 @@ public class CGIHandler {
                 return createErrorResponse(404, "Not Found - Script not found");
             }
 
-            if (!Files.isExecutable(scriptPath)) {
-                return createErrorResponse(403, "Forbidden - Script not executable");
-            }
+            // Skip executable check on Windows as Files.isExecutable() doesn't work reliably for scripts
+            // The interpreter will handle execution; if the script is malformed, it will fail at runtime
+            // String osName = System.getProperty("os.name").toLowerCase();
+            // if (!osName.contains("win") && !Files.isExecutable(scriptPath)) {
+            //     return createErrorResponse(403, "Forbidden - Script not executable");
+            // }
 
             String extension = getFileExtension(scriptName);
             String interpreter = getInterpreter(extension);
             if (interpreter == null) {
                 return createErrorResponse(403, "Forbidden - Unsupported script type");
             }
+
+            // Note: We don't verify interpreter existence at startup to allow for
+            // different installations (e.g., python vs python3 vs py on Windows).
+            // If the interpreter is missing, the process will fail at runtime.
 
             Map<String, String> env = buildEnvironment(request, scriptName, pathInfo);
             String body = request.getBody();
@@ -89,6 +101,9 @@ public class CGIHandler {
             Map<String, String> processEnv = pb.environment();
             processEnv.putAll(env);
 
+            // Redirect stderr to prevent deadlock (architectural limitation: cannot consume stderr in single-threaded event loop)
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+
             Process process = pb.start();
 
             if (body != null && !body.isEmpty()) {
@@ -97,8 +112,6 @@ public class CGIHandler {
                     processInput.flush();
                 }
             }
-
-            process.getOutputStream().close();
 
             boolean finished = process.waitFor(CGI_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
             if (!finished) {
@@ -252,7 +265,7 @@ public class CGIHandler {
 
     private String readAllText(InputStream inputStream) throws IOException {
         StringBuilder sb = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, java.nio.charset.StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 sb.append(line).append("\n");

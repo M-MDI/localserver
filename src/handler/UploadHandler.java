@@ -29,6 +29,11 @@ public class UploadHandler {
         }
 
         String filename = requestPath.substring("/upload/".length());
+        // Strip query string if present
+        int queryIndex = filename.indexOf('?');
+        if (queryIndex >= 0) {
+            filename = filename.substring(0, queryIndex);
+        }
         if (filename.isEmpty()) {
             return createErrorResponse(400, "Bad Request - Missing filename");
         }
