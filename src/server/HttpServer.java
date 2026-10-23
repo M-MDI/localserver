@@ -96,9 +96,31 @@ public class HttpServer {
                 connection.prepareResponse();
                 key.interestOps(SelectionKey.OP_WRITE);
             }
+            // If not complete, keep OP_READ interest to continue reading
         } catch (IOException e) {
-            key.cancel();
-            e.printStackTrace();
+            Connection connection = (Connection) key.attachment();
+            if (connection != null) {
+                connection.prepareErrorResponse(400, "Bad Request");
+                key.interestOps(SelectionKey.OP_WRITE);
+            } else {
+                key.cancel();
+            }
+        } catch (http.PayloadTooLargeException e) {
+            Connection connection = (Connection) key.attachment();
+            if (connection != null) {
+                connection.prepareErrorResponse(413, "Payload Too Large");
+                key.interestOps(SelectionKey.OP_WRITE);
+            } else {
+                key.cancel();
+            }
+        } catch (Exception e) {
+            Connection connection = (Connection) key.attachment();
+            if (connection != null) {
+                connection.prepareErrorResponse(400, "Bad Request");
+                key.interestOps(SelectionKey.OP_WRITE);
+            } else {
+                key.cancel();
+            }
         }
     }
 

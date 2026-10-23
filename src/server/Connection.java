@@ -1,6 +1,7 @@
 package server;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import http.HttpParser;
@@ -23,6 +24,10 @@ public class Connection {
     private final String documentRoot;
     private final ServerConfig config;
     private static final SessionManager sessionManager = new SessionManager();
+    private ByteArrayOutputStream accumulatedData;
+    private boolean requestComplete;
+    private int expectedBodySize;
+    private static final int MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB max accumulation
 
     public Connection(SocketChannel channel, String documentRoot, ServerConfig config) {
         this.channel = channel;
@@ -31,23 +36,97 @@ public class Connection {
         this.lastActiveTime = System.currentTimeMillis();
         this.documentRoot = documentRoot;
         this.config = config;
+        this.accumulatedData = new ByteArrayOutputStream();
+        this.requestComplete = false;
+        this.expectedBodySize = -1;
     }
 
-    public boolean read() throws IOException {
+    public boolean read() throws IOException, PayloadTooLargeException {
         lastActiveTime = System.currentTimeMillis();
+        readBuffer.clear();
         int bytesRead = channel.read(readBuffer);
         if (bytesRead == -1) {
             close();
             return false;
         }
-        return bytesRead > 0;
+
+        if (bytesRead > 0) {
+            readBuffer.flip();
+            byte[] data = new byte[readBuffer.remaining()];
+            readBuffer.get(data);
+            accumulatedData.write(data);
+
+            // Check if we have enough data to parse
+            if (accumulatedData.size() > MAX_BUFFER_SIZE) {
+                throw new IOException("Request too large");
+            }
+
+            // Try to determine if we have a complete request
+            ByteBuffer tempBuffer = ByteBuffer.wrap(accumulatedData.toByteArray());
+            HttpRequest tempRequest = HttpParser.parseHeadersOnly(tempBuffer);
+            if (tempRequest != null) {
+                String contentLength = tempRequest.getHeaders().get("Content-Length");
+                String transferEncoding = tempRequest.getHeaders().get("Transfer-Encoding");
+                
+                if (transferEncoding != null && transferEncoding.contains("chunked")) {
+                    // For chunked, we parse when we have complete chunks
+                    // Try full parse
+                    tempBuffer.rewind();
+                    try {
+                        HttpRequest fullRequest = HttpParser.parse(tempBuffer);
+                        if (fullRequest != null && fullRequest.getBody() != null) {
+                            requestComplete = true;
+                        }
+                    } catch (PayloadTooLargeException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        // Not complete yet
+                    }
+                } else if (contentLength != null) {
+                    try {
+                        expectedBodySize = Integer.parseInt(contentLength);
+                        if (expectedBodySize < 0) {
+                            throw new IOException("Invalid Content-Length");
+                        }
+                        if (expectedBodySize > config.getMaxBodySize()) {
+                            throw new PayloadTooLargeException();
+                        }
+                    } catch (NumberFormatException e) {
+                        throw new IOException("Invalid Content-Length");
+                    }
+
+                    // Check if we have the complete body
+                    int headerEnd = findHeaderEnd(accumulatedData.toByteArray());
+                    if (headerEnd >= 0) {
+                        int bodyReceived = accumulatedData.size() - headerEnd - 4; // -4 for \r\n\r\n
+                        if (bodyReceived >= expectedBodySize) {
+                            requestComplete = true;
+                        }
+                    }
+                } else {
+                    // No body expected, request is complete after headers
+                    requestComplete = true;
+                }
+            }
+        }
+
+        return requestComplete;
+    }
+
+    private int findHeaderEnd(byte[] data) {
+        for (int i = 0; i < data.length - 3; i++) {
+            if (data[i] == '\r' && data[i+1] == '\n' && data[i+2] == '\r' && data[i+3] == '\n') {
+                return i;
+            }
+        }
+        return -1;
     }
 
     public void prepareResponse() {
-        readBuffer.flip();
+        ByteBuffer fullBuffer = ByteBuffer.wrap(accumulatedData.toByteArray());
         HttpRequest request = null;
         try {
-            request = HttpParser.parse(readBuffer);
+            request = HttpParser.parse(fullBuffer);
         } catch (PayloadTooLargeException e) {
             writeBuffer = createErrorResponse(413, "Payload Too Large");
             return;
@@ -109,6 +188,10 @@ public class Connection {
         }
     }
 
+    public void prepareErrorResponse(int statusCode, String statusText) {
+        writeBuffer = createErrorResponse(statusCode, statusText);
+    }
+
     private ByteBuffer createErrorResponse(int statusCode, String statusText) {
         String errorPagePath = config.getErrorPages().get(statusCode);
         if (errorPagePath != null) {
@@ -121,7 +204,7 @@ public class Connection {
                             "Content-Length: " + content.length + "\r\n" +
                             "Connection: close\r\n";
                     if (statusCode == 405) {
-                        response += "Allow: GET, DELETE\r\n";
+                        response += "Allow: GET, HEAD, DELETE, POST\r\n";
                     }
                     response += "\r\n";
                     byte[] headerBytes = response.getBytes();
@@ -142,7 +225,7 @@ public class Connection {
                 "Content-Length: " + body.length() + "\r\n" +
                 "Connection: close\r\n";
         if (statusCode == 405) {
-            response += "Allow: GET, DELETE\r\n";
+            response += "Allow: GET, HEAD, DELETE, POST\r\n";
         }
         response += "\r\n" + body;
         return ByteBuffer.wrap(response.getBytes());

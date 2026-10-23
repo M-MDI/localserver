@@ -38,8 +38,26 @@ public class UploadHandler {
         }
 
         String body = request.getBody();
-        if (body == null || body.isEmpty()) {
+        int contentLength = request.getContentLength();
+        
+        // Reject empty body or no body
+        if (body == null || body.isEmpty() || body.getBytes().length == 0) {
             return createErrorResponse(400, "Bad Request - Empty body");
+        }
+        
+        // Also reject if contentLength is explicitly 0
+        if (contentLength == 0) {
+            return createErrorResponse(400, "Bad Request - Empty body");
+        }
+
+        // Defense-in-depth: validate body size against declared Content-Length
+        if (contentLength >= 0 && body.getBytes().length != contentLength) {
+            return createErrorResponse(400, "Bad Request - Body size mismatch");
+        }
+
+        // Defense-in-depth: enforce max body size
+        if (body.getBytes().length > config.getMaxBodySize()) {
+            return createErrorResponse(413, "Payload Too Large");
         }
 
         try {
@@ -57,7 +75,20 @@ public class UploadHandler {
                 return createErrorResponse(409, "Conflict - File already exists");
             }
 
-            Files.write(targetFile, body.getBytes());
+            // Write to temporary file first to prevent partial writes
+            Path tempFile = uploadDir.resolve(".tmp_" + filename + "_" + System.currentTimeMillis());
+            try {
+                Files.write(tempFile, body.getBytes());
+                // Move only after successful write (will fail if target exists)
+                Files.move(tempFile, targetFile);
+            } catch (IOException e) {
+                // Clean up temp file if write or move fails
+                try {
+                    Files.deleteIfExists(tempFile);
+                } catch (IOException ignored) {
+                }
+                throw e;
+            }
 
             HttpResponse response = new HttpResponse();
             response.setStatusCode(201);

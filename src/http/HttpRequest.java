@@ -11,10 +11,12 @@ public class HttpRequest {
     private Map<String, String> headers;
     private String body;
     private Map<String, String> cookies;
+    private int contentLength;
 
     public HttpRequest() {
         this.headers = new HashMap<>();
         this.cookies = new HashMap<>();
+        this.contentLength = -1;
     }
 
     public String getMethod() {
@@ -74,5 +76,13 @@ public class HttpRequest {
         if (cookieHeader != null) {
             this.cookies = Cookie.parseCookieHeader(cookieHeader);
         }
+    }
+
+    public int getContentLength() {
+        return contentLength;
+    }
+
+    public void setContentLength(int contentLength) {
+        this.contentLength = contentLength;
     }
 }
