@@ -17,6 +17,10 @@ public class HttpParser {
     }
 
     public static HttpRequest parse(ByteBuffer buffer) throws PayloadTooLargeException {
+        return parse(buffer, MAX_BODY_SIZE);
+    }
+
+    public static HttpRequest parse(ByteBuffer buffer, int maxBodySize) throws PayloadTooLargeException {
         HttpRequest request = new HttpRequest();
         String requestLine = readLine(buffer);
         if (requestLine == null || requestLine.isEmpty()) {
@@ -47,14 +51,14 @@ public class HttpParser {
 
         // Parse Body
         if (headers.containsKey("Transfer-Encoding") && headers.get("Transfer-Encoding").contains("chunked")) {
-            request.setBody(parseChunkedBody(buffer));
+            request.setBody(parseChunkedBody(buffer, maxBodySize));
         } else if (headers.containsKey("Content-Length")) {
             try {
                 int contentLength = Integer.parseInt(headers.get("Content-Length"));
                 if (contentLength < 0) {
                     return null; // Invalid Content-Length - malformed request
                 }
-                if (contentLength > MAX_BODY_SIZE) {
+                if (contentLength > maxBodySize) {
                     throw new PayloadTooLargeException();
                 }
                 request.setContentLength(contentLength);
@@ -106,7 +110,7 @@ public class HttpParser {
         return request;
     }
 
-    private static String parseChunkedBody(ByteBuffer buffer) throws PayloadTooLargeException {
+    private static String parseChunkedBody(ByteBuffer buffer, int maxBodySize) throws PayloadTooLargeException {
         StringBuilder body = new StringBuilder();
         int totalSize = 0;
         while (true) {
@@ -127,7 +131,7 @@ public class HttpParser {
                     break; // Last chunk
                 }
 
-                if (totalSize + chunkSize > MAX_BODY_SIZE) {
+                if (totalSize + chunkSize > maxBodySize) {
                     throw new PayloadTooLargeException();
                 }
 

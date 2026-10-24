@@ -56,11 +56,12 @@ public class StaticHandler {
 
         try {
             if (Files.isDirectory(resolvedPath)) {
-                Path indexPath = resolvedPath.resolve("index.html");
+                String indexName = (config != null && config.getIndexFile() != null) ? config.getIndexFile() : "index.html";
+                Path indexPath = resolvedPath.resolve(indexName);
                 if (Files.exists(indexPath) && Files.isReadable(indexPath)) {
                     return serveFile(indexPath);
                 } else {
-                    if (config.isDirectoryListing()) {
+                    if (config != null && config.isDirectoryListing()) {
                         return generateDirectoryListing(resolvedPath);
                     } else {
                         return createErrorResponse(403, "Forbidden");
@@ -273,7 +274,7 @@ public class StaticHandler {
     }
 
     private HttpResponse createErrorResponse(int statusCode, String statusText) {
-        String errorPagePath = config.getErrorPages().get(statusCode);
+        String errorPagePath = (config != null && config.getErrorPages() != null) ? config.getErrorPages().get(statusCode) : null;
         if (errorPagePath != null) {
             try {
                 Path errorFile = Paths.get(errorPagePath).toAbsolutePath().normalize();

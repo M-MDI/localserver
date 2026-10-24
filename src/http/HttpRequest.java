@@ -47,6 +47,22 @@ public class HttpRequest {
         return headers;
     }
 
+    public String getHeader(String name) {
+        if (name == null || headers == null) {
+            return null;
+        }
+        String direct = headers.get(name);
+        if (direct != null) {
+            return direct;
+        }
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(name)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
     public void setHeaders(Map<String, String> headers) {
         this.headers = headers;
     }

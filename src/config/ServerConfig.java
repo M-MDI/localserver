@@ -36,6 +36,12 @@ public class ServerConfig {
         this.ports = ports;
     }
 
+    public void addPort(int port) {
+        if (!this.ports.contains(port)) {
+            this.ports.add(port);
+        }
+    }
+
     public String getDocumentRoot() {
         return documentRoot;
     }
@@ -81,7 +87,9 @@ public class ServerConfig {
     }
 
     public void addServerName(String serverName) {
-        this.serverNames.add(serverName.toLowerCase());
+        if (serverName != null && !serverName.trim().isEmpty()) {
+            this.serverNames.add(serverName.trim().toLowerCase());
+        }
     }
 
     public boolean isDefaultServer() {

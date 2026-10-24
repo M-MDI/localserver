@@ -3,7 +3,11 @@ package server;
 import java.io.IOException;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.channels.SocketChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import http.HttpParser;
 import http.HttpRequest;
 import http.HttpResponse;
@@ -15,27 +19,48 @@ import router.Route;
 import router.Router;
 import session.SessionManager;
 import config.ServerConfig;
+import config.ServerConfigurations;
 
 public class Connection {
     private final SocketChannel channel;
     private final ByteBuffer readBuffer;
     private ByteBuffer writeBuffer;
     private long lastActiveTime;
-    private final String documentRoot;
-    private final ServerConfig config;
+    private final ServerConfigurations configurations;
+    private final int serverPort;
+    private ServerConfig selectedConfig;
+    private String documentRoot;
     private static final SessionManager sessionManager = new SessionManager();
     private ByteArrayOutputStream accumulatedData;
     private boolean requestComplete;
     private int expectedBodySize;
     private static final int MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB max accumulation
 
+    public Connection(SocketChannel channel, ServerConfigurations configurations, int serverPort) {
+        this.channel = channel;
+        this.readBuffer = ByteBuffer.allocate(8192);
+        this.writeBuffer = null;
+        this.lastActiveTime = System.currentTimeMillis();
+        this.configurations = configurations;
+        this.serverPort = serverPort;
+        this.accumulatedData = new ByteArrayOutputStream();
+        this.requestComplete = false;
+        this.expectedBodySize = -1;
+    }
+
+    // Backward compatibility constructor for single-server mode
     public Connection(SocketChannel channel, String documentRoot, ServerConfig config) {
         this.channel = channel;
         this.readBuffer = ByteBuffer.allocate(8192);
         this.writeBuffer = null;
         this.lastActiveTime = System.currentTimeMillis();
+        this.configurations = new ServerConfigurations();
+        this.configurations.addServerConfig(config);
+        int port = config.getPorts().isEmpty() ? 65432 : config.getPorts().get(0);
+        this.configurations.setDefaultServerForPort(port, config);
+        this.serverPort = port;
         this.documentRoot = documentRoot;
-        this.config = config;
+        this.selectedConfig = config;
         this.accumulatedData = new ByteArrayOutputStream();
         this.requestComplete = false;
         this.expectedBodySize = -1;
@@ -65,15 +90,19 @@ public class Connection {
             ByteBuffer tempBuffer = ByteBuffer.wrap(accumulatedData.toByteArray());
             HttpRequest tempRequest = HttpParser.parseHeadersOnly(tempBuffer);
             if (tempRequest != null) {
-                String contentLength = tempRequest.getHeaders().get("Content-Length");
-                String transferEncoding = tempRequest.getHeaders().get("Transfer-Encoding");
-                
+                // Select server configuration based on Host header
+                selectServerConfig(tempRequest);
+
+                String contentLength = tempRequest.getHeader("Content-Length");
+                String transferEncoding = tempRequest.getHeader("Transfer-Encoding");
+
+                int maxAllowedBody = (selectedConfig != null) ? selectedConfig.getMaxBodySize() : MAX_BUFFER_SIZE;
+
                 if (transferEncoding != null && transferEncoding.contains("chunked")) {
                     // For chunked, we parse when we have complete chunks
-                    // Try full parse
                     tempBuffer.rewind();
                     try {
-                        HttpRequest fullRequest = HttpParser.parse(tempBuffer);
+                        HttpRequest fullRequest = HttpParser.parse(tempBuffer, maxAllowedBody);
                         if (fullRequest != null && fullRequest.getBody() != null) {
                             requestComplete = true;
                         }
@@ -88,7 +117,7 @@ public class Connection {
                         if (expectedBodySize < 0) {
                             throw new IOException("Invalid Content-Length");
                         }
-                        if (expectedBodySize > config.getMaxBodySize()) {
+                        if (expectedBodySize > maxAllowedBody) {
                             throw new PayloadTooLargeException();
                         }
                     } catch (NumberFormatException e) {
@@ -113,6 +142,24 @@ public class Connection {
         return requestComplete;
     }
 
+    private void selectServerConfig(HttpRequest request) {
+        if (selectedConfig != null) {
+            return;
+        }
+
+        String hostHeader = request.getHeader("Host");
+        selectedConfig = configurations.selectServerConfig(serverPort, hostHeader);
+
+        if (selectedConfig != null) {
+            documentRoot = selectedConfig.getDocumentRoot();
+        } else {
+            selectedConfig = configurations.getDefaultServer(serverPort);
+            if (selectedConfig != null) {
+                documentRoot = selectedConfig.getDocumentRoot();
+            }
+        }
+    }
+
     private int findHeaderEnd(byte[] data) {
         for (int i = 0; i < data.length - 3; i++) {
             if (data[i] == '\r' && data[i+1] == '\n' && data[i+2] == '\r' && data[i+3] == '\n') {
@@ -126,7 +173,8 @@ public class Connection {
         ByteBuffer fullBuffer = ByteBuffer.wrap(accumulatedData.toByteArray());
         HttpRequest request = null;
         try {
-            request = HttpParser.parse(fullBuffer);
+            int maxBody = (selectedConfig != null) ? selectedConfig.getMaxBodySize() : HttpParser.getMaxBodySize();
+            request = HttpParser.parse(fullBuffer, maxBody);
         } catch (PayloadTooLargeException e) {
             writeBuffer = createErrorResponse(413, "Payload Too Large");
             return;
@@ -137,6 +185,11 @@ public class Connection {
         if (request == null) {
             writeBuffer = createErrorResponse(400, "Bad Request");
             return;
+        }
+
+        // Ensure server config is selected
+        if (selectedConfig == null) {
+            selectServerConfig(request);
         }
 
         // Periodically cleanup expired sessions (every 100 requests approximately)
@@ -171,15 +224,15 @@ public class Connection {
             } else if (route.isRedirect()) {
                 writeBuffer = createRedirectResponse(route.getRedirectPath());
             } else if (request.getPath().startsWith("/upload") && "POST".equalsIgnoreCase(request.getMethod())) {
-                UploadHandler uploadHandler = new UploadHandler(uploadDir, config);
+                UploadHandler uploadHandler = new UploadHandler(uploadDir, selectedConfig);
                 HttpResponse response = uploadHandler.handle(request);
                 writeBuffer = response.toByteBuffer();
             } else if (request.getPath().startsWith("/cgi-bin")) {
-                CGIHandler cgiHandler = new CGIHandler(cgiDir, config);
+                CGIHandler cgiHandler = new CGIHandler(cgiDir, selectedConfig);
                 HttpResponse response = cgiHandler.handle(request);
                 writeBuffer = response.toByteBuffer();
             } else {
-                StaticHandler handler = new StaticHandler(route.getDocumentRoot(), config);
+                StaticHandler handler = new StaticHandler(route.getDocumentRoot(), selectedConfig);
                 HttpResponse response = handler.handle(request);
                 writeBuffer = response.toByteBuffer();
             }
@@ -193,12 +246,21 @@ public class Connection {
     }
 
     private ByteBuffer createErrorResponse(int statusCode, String statusText) {
-        String errorPagePath = config.getErrorPages().get(statusCode);
+        ServerConfig configToUse = selectedConfig;
+        if (configToUse == null && configurations != null) {
+            configToUse = configurations.getDefaultServer(serverPort);
+        }
+
+        String errorPagePath = null;
+        if (configToUse != null && configToUse.getErrorPages() != null) {
+            errorPagePath = configToUse.getErrorPages().get(statusCode);
+        }
+
         if (errorPagePath != null) {
             try {
-                java.nio.file.Path errorFile = java.nio.file.Paths.get(errorPagePath).toAbsolutePath().normalize();
-                if (java.nio.file.Files.exists(errorFile) && java.nio.file.Files.isRegularFile(errorFile)) {
-                    byte[] content = java.nio.file.Files.readAllBytes(errorFile);
+                Path errorFile = Paths.get(errorPagePath).toAbsolutePath().normalize();
+                if (Files.exists(errorFile) && Files.isRegularFile(errorFile)) {
+                    byte[] content = Files.readAllBytes(errorFile);
                     String response = "HTTP/1.1 " + statusCode + " " + statusText + "\r\n" +
                             "Content-Type: text/html; charset=UTF-8\r\n" +
                             "Content-Length: " + content.length + "\r\n" +
@@ -207,18 +269,18 @@ public class Connection {
                         response += "Allow: GET, HEAD, DELETE, POST\r\n";
                     }
                     response += "\r\n";
-                    byte[] headerBytes = response.getBytes();
-                    java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(headerBytes.length + content.length);
+                    byte[] headerBytes = response.getBytes(StandardCharsets.UTF_8);
+                    ByteBuffer buffer = ByteBuffer.allocate(headerBytes.length + content.length);
                     buffer.put(headerBytes);
                     buffer.put(content);
                     buffer.flip();
                     return buffer;
                 }
-            } catch (java.io.IOException e) {
+            } catch (IOException e) {
                 // Fall back to default error
             }
         }
-        
+
         String body = statusCode + " " + statusText;
         String response = "HTTP/1.1 " + statusCode + " " + statusText + "\r\n" +
                 "Content-Type: text/plain\r\n" +
@@ -228,7 +290,7 @@ public class Connection {
             response += "Allow: GET, HEAD, DELETE, POST\r\n";
         }
         response += "\r\n" + body;
-        return ByteBuffer.wrap(response.getBytes());
+        return ByteBuffer.wrap(response.getBytes(StandardCharsets.UTF_8));
     }
 
     public boolean write() throws IOException {
@@ -236,7 +298,7 @@ public class Connection {
         if (writeBuffer == null) {
             return true;
         }
-        
+
         channel.write(writeBuffer);
         return !writeBuffer.hasRemaining(); // Returns true when fully written
     }
@@ -264,6 +326,6 @@ public class Connection {
                 "Connection: close\r\n" +
                 "\r\n" +
                 body;
-        return ByteBuffer.wrap(response.getBytes());
+        return ByteBuffer.wrap(response.getBytes(StandardCharsets.UTF_8));
     }
 }

@@ -4,31 +4,38 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.channels.*;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 
 public class HttpServer {
-    private final int[] ports;
-    private final String documentRoot;
-    private final config.ServerConfig config;
+    private final config.ServerConfigurations configurations;
     private Selector selector;
     private volatile boolean running;
     private static final long CONNECTION_TIMEOUT_MS = 30000;
 
+    public HttpServer(config.ServerConfigurations configurations) {
+        this.configurations = configurations;
+    }
+
+    // Backward compatibility constructor for single-server mode
     public HttpServer(int[] ports, String documentRoot, config.ServerConfig config) {
-        this.ports = ports;
-        this.documentRoot = documentRoot;
-        this.config = config;
+        this.configurations = new config.ServerConfigurations();
+        this.configurations.addServerConfig(config);
+        for (int port : ports) {
+            this.configurations.setDefaultServerForPort(port, config);
+        }
     }
 
     public void start() throws IOException {
         selector = Selector.open();
         running = true;
 
-        for (int port : ports) {
+        List<Integer> allPorts = configurations.getAllPorts();
+        for (Integer port : allPorts) {
             ServerSocketChannel serverChannel = ServerSocketChannel.open();
             serverChannel.configureBlocking(false);
             serverChannel.bind(new InetSocketAddress(port));
-            serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+            serverChannel.register(selector, SelectionKey.OP_ACCEPT, port);
             System.out.println("Server listening on port " + port);
         }
 
@@ -74,7 +81,8 @@ public class HttpServer {
 
             if (clientChannel != null) {
                 clientChannel.configureBlocking(false);
-                Connection connection = new Connection(clientChannel, documentRoot, config);
+                Integer port = (Integer) key.attachment();
+                Connection connection = new Connection(clientChannel, configurations, port);
                 clientChannel.register(selector, SelectionKey.OP_READ, connection);
             }
         } catch (IOException e) {
@@ -165,6 +173,14 @@ public class HttpServer {
         running = false;
         if (selector != null) {
             selector.wakeup();
+            try {
+                for (SelectionKey key : selector.keys()) {
+                    try {
+                        key.channel().close();
+                    } catch (IOException ignored) {}
+                }
+                selector.close();
+            } catch (IOException ignored) {}
         }
     }
 }

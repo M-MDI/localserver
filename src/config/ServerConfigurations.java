@@ -12,10 +12,12 @@ import java.util.Map;
 public class ServerConfigurations {
     private final List<ServerConfig> allConfigs;
     private final Map<Integer, List<ServerConfig>> portToConfigs;
+    private final Map<Integer, ServerConfig> defaultServerByPort;
 
     public ServerConfigurations() {
         this.allConfigs = new ArrayList<>();
         this.portToConfigs = new HashMap<>();
+        this.defaultServerByPort = new HashMap<>();
     }
 
     public void addServerConfig(ServerConfig config) {
@@ -33,6 +35,22 @@ public class ServerConfigurations {
         return portToConfigs.getOrDefault(port, new ArrayList<>());
     }
 
+    public void setDefaultServerForPort(int port, ServerConfig config) {
+        defaultServerByPort.put(port, config);
+    }
+
+    public ServerConfig getDefaultServer(int port) {
+        ServerConfig defaultConfig = defaultServerByPort.get(port);
+        if (defaultConfig != null) {
+            return defaultConfig;
+        }
+        List<ServerConfig> configs = getConfigsForPort(port);
+        if (!configs.isEmpty()) {
+            return configs.get(0);
+        }
+        return null;
+    }
+
     public ServerConfig selectServerConfig(int port, String hostHeader) {
         List<ServerConfig> configsForPort = getConfigsForPort(port);
         if (configsForPort.isEmpty()) {
@@ -43,20 +61,28 @@ public class ServerConfigurations {
         String normalizedHost = normalizeHostHeader(hostHeader);
 
         // Try to match by server_name
-        for (ServerConfig config : configsForPort) {
-            if (config.getServerNames().contains(normalizedHost)) {
-                return config;
+        if (!normalizedHost.isEmpty()) {
+            for (ServerConfig config : configsForPort) {
+                if (config.getServerNames().contains(normalizedHost)) {
+                    return config;
+                }
+            }
+
+            // Check wildcard matching
+            for (ServerConfig config : configsForPort) {
+                if (config.getServerNames().contains("*")) {
+                    return config;
+                }
             }
         }
 
-        // No match, try default server
-        for (ServerConfig config : configsForPort) {
-            if (config.isDefaultServer()) {
-                return config;
-            }
+        // No match, return default server for this port
+        ServerConfig defaultConfig = defaultServerByPort.get(port);
+        if (defaultConfig != null) {
+            return defaultConfig;
         }
 
-        // No default server, use first one (deterministic fallback)
+        // Deterministic fallback to first server on this port
         return configsForPort.get(0);
     }
 
@@ -65,13 +91,23 @@ public class ServerConfigurations {
             return "";
         }
 
-        // Remove port if present (e.g., "localhost:8080" -> "localhost")
-        int colonIndex = hostHeader.indexOf(':');
-        if (colonIndex > 0) {
-            hostHeader = hostHeader.substring(0, colonIndex);
+        String host = hostHeader.trim();
+
+        // Handle IPv6 literal with port, e.g., "[::1]:8080"
+        if (host.startsWith("[")) {
+            int closingBracket = host.indexOf(']');
+            if (closingBracket > 0) {
+                host = host.substring(0, closingBracket + 1);
+            }
+        } else {
+            // Remove port if present (e.g., "localhost:8080" -> "localhost")
+            int colonIndex = host.indexOf(':');
+            if (colonIndex >= 0) {
+                host = host.substring(0, colonIndex);
+            }
         }
 
-        return hostHeader.toLowerCase().trim();
+        return host.toLowerCase().trim();
     }
 
     public List<Integer> getAllPorts() {
