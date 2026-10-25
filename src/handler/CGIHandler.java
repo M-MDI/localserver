@@ -3,14 +3,11 @@ package handler;
 import http.HttpRequest;
 import http.HttpResponse;
 import config.ServerConfig;
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -21,6 +18,7 @@ public class CGIHandler {
     private final ServerConfig config;
     private final String routePrefix;
     private static final long CGI_TIMEOUT_MS = 5000; // 5 second timeout
+    private static final long CGI_MAX_OUTPUT_BYTES = 10L * 1024 * 1024;
 
     public CGIHandler(String cgiDirectory, ServerConfig config) {
         this(cgiDirectory, config, "/cgi-bin");
@@ -63,6 +61,9 @@ public class CGIHandler {
             return createErrorResponse(403, "Forbidden - Invalid script name");
         }
 
+        Path stdinFile = null;
+        Path stdoutFile = null;
+        Process process = null;
         try {
             Path cgiDir = Paths.get(cgiDirectory).toAbsolutePath().normalize();
             if (!Files.exists(cgiDir) || !Files.isDirectory(cgiDir)) {
@@ -87,6 +88,10 @@ public class CGIHandler {
             Map<String, String> env = buildEnvironment(request, scriptName, pathInfo);
             String body = request.getBody();
 
+            stdinFile = Files.createTempFile("localserver-cgi-", ".stdin");
+            stdoutFile = Files.createTempFile("localserver-cgi-", ".stdout");
+            Files.write(stdinFile, body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8));
+
             ProcessBuilder pb = new ProcessBuilder();
             List<String> command = new ArrayList<>();
             command.add(interpreter);
@@ -100,24 +105,33 @@ public class CGIHandler {
 
             // Redirect stderr to prevent deadlock
             pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            // File redirection avoids pipe deadlocks while keeping the server event loop single-threaded.
+            pb.redirectInput(stdinFile.toFile());
+            pb.redirectOutput(stdoutFile.toFile());
 
-            Process process = pb.start();
+            process = pb.start();
 
-            // Send body to script stdin if present
-            if (body != null && !body.isEmpty()) {
-                try (OutputStream os = process.getOutputStream()) {
-                    os.write(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                    os.flush();
+            // Poll the child while bounding its captured output.
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(CGI_TIMEOUT_MS);
+            boolean finished = false;
+            while (System.nanoTime() < deadline) {
+                if (process.waitFor(50, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    finished = true;
+                    break;
                 }
-            } else {
-                process.getOutputStream().close();
+                if (Files.size(stdoutFile) > CGI_MAX_OUTPUT_BYTES) {
+                    process.destroyForcibly();
+                    return createErrorResponse(500, "Internal Server Error - CGI output exceeded limit");
+                }
             }
-
-            // Read script output with timeout
-            boolean finished = process.waitFor(CGI_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
             if (!finished) {
                 process.destroyForcibly();
+                process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS);
                 return createErrorResponse(500, "Internal Server Error - CGI script timed out");
+            }
+
+            if (Files.size(stdoutFile) > CGI_MAX_OUTPUT_BYTES) {
+                return createErrorResponse(500, "Internal Server Error - CGI output exceeded limit");
             }
 
             int exitCode = process.exitValue();
@@ -126,7 +140,7 @@ public class CGIHandler {
             }
 
             // Parse CGI output
-            String output = readAllText(process.getInputStream());
+            String output = new String(Files.readAllBytes(stdoutFile), StandardCharsets.UTF_8);
             return parseCGIOutput(output);
 
         } catch (IOException e) {
@@ -134,6 +148,20 @@ public class CGIHandler {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return createErrorResponse(500, "Internal Server Error - CGI execution interrupted");
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+            deleteTemporaryFile(stdinFile);
+            deleteTemporaryFile(stdoutFile);
+        }
+    }
+
+    private void deleteTemporaryFile(Path path) {
+        if (path != null) {
+            try {
+                Files.deleteIfExists(path);
+            } catch (IOException ignored) {}
         }
     }
 
@@ -284,17 +312,6 @@ public class CGIHandler {
             default:
                 return null;
         }
-    }
-
-    private String readAllText(InputStream inputStream) throws IOException {
-        StringBuilder sb = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, java.nio.charset.StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
-        }
-        return sb.toString();
     }
 
     private HttpResponse createErrorResponse(int statusCode, String statusText) {

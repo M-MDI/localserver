@@ -7,6 +7,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -233,7 +235,8 @@ public class ConfigLoader {
     }
 
     private static ServerConfigurations parseServerBlocks(List<String> lines, String configPath) throws IOException {
-        ServerConfigurations configurations = new ServerConfigurations();
+        List<ServerConfig> parsedConfigs = new ArrayList<>();
+        List<String> rejectedBlocks = new ArrayList<>();
         int lineNum = 0;
         int blockStart = -1;
         int blockEnd = -1;
@@ -266,8 +269,13 @@ public class ConfigLoader {
                     throw new IOException("Unmatched closing brace at line " + lineNum);
                 }
                 blockEnd = i;
-                ServerConfig config = parseServerBlock(lines, blockStart, blockEnd, configPath, serverIndex);
-                configurations.addServerConfig(config);
+                try {
+                    parsedConfigs.add(parseServerBlock(lines, blockStart, blockEnd, configPath, serverIndex));
+                } catch (IOException e) {
+                    String reason = "Invalid server block " + (serverIndex + 1) + ": " + e.getMessage();
+                    rejectedBlocks.add(reason);
+                    System.err.println("Skipping " + reason);
+                }
                 blockStart = -1;
                 blockEnd = -1;
                 serverIndex++;
@@ -281,10 +289,7 @@ public class ConfigLoader {
             throw new IOException("Unclosed server block starting at line " + (blockStart + 1));
         }
 
-        // Validate configurations
-        validateConfigurations(configurations);
-
-        return configurations;
+        return buildValidConfigurations(parsedConfigs, rejectedBlocks);
     }
 
     private static ServerConfig parseServerBlock(List<String> lines, int start, int end, String configPath, int serverIndex) throws IOException {
@@ -352,9 +357,10 @@ public class ConfigLoader {
                         if (port < 1 || port > 65535) {
                             throw new IOException("Invalid port number: " + port + " (must be 1-65535)");
                         }
-                        if (!ports.contains(port)) {
-                            ports.add(port);
+                        if (ports.contains(port)) {
+                            throw new IOException("Duplicate listen port " + port + " in server block");
                         }
+                        ports.add(port);
                     } catch (NumberFormatException e) {
                         throw new IOException("Invalid port number: " + token);
                     }
@@ -757,55 +763,91 @@ public class ConfigLoader {
         }
     }
 
-    private static void validateConfigurations(ServerConfigurations configurations) throws IOException {
-        List<ServerConfig> allConfigs = configurations.getAllConfigs();
-        List<Integer> allPorts = configurations.getAllPorts();
-
-        // Check for duplicate explicit server names (identifiers)
-        Set<String> explicitServerNames = new HashSet<>();
-        for (ServerConfig config : allConfigs) {
+    private static ServerConfigurations buildValidConfigurations(List<ServerConfig> candidates,
+                                                                  List<String> rejectedBlocks) throws IOException {
+        Map<ServerConfig, String> rejected = new IdentityHashMap<>();
+        Map<String, List<ServerConfig>> explicitNames = new HashMap<>();
+        for (ServerConfig config : candidates) {
             String name = config.getServerName();
             if (name != null && !name.startsWith("server_")) {
-                if (!explicitServerNames.add(name.toLowerCase())) {
-                    throw new IOException("Duplicate server name: " + name);
+                explicitNames.computeIfAbsent(name.toLowerCase(), ignored -> new ArrayList<>()).add(config);
+            }
+        }
+        for (Map.Entry<String, List<ServerConfig>> entry : explicitNames.entrySet()) {
+            if (entry.getValue().size() > 1) {
+                for (ServerConfig config : entry.getValue()) {
+                    rejected.put(config, "Duplicate server name: " + config.getServerName());
                 }
             }
         }
 
-        // Check each port for conflicting server_name and default server count
-        for (Integer port : allPorts) {
-            List<ServerConfig> configsForPort = configurations.getConfigsForPort(port);
-
-            // Check for duplicate default servers per port
-            ServerConfig explicitDefault = null;
-            for (ServerConfig config : configsForPort) {
+        Map<Integer, List<ServerConfig>> byPort = new HashMap<>();
+        for (ServerConfig config : candidates) {
+            for (Integer port : config.getPorts()) {
+                byPort.computeIfAbsent(port, ignored -> new ArrayList<>()).add(config);
+            }
+        }
+        for (Map.Entry<Integer, List<ServerConfig>> portEntry : byPort.entrySet()) {
+            int port = portEntry.getKey();
+            List<ServerConfig> servers = portEntry.getValue();
+            List<ServerConfig> defaults = new ArrayList<>();
+            Map<String, List<ServerConfig>> namesOnPort = new HashMap<>();
+            for (ServerConfig config : servers) {
                 if (config.isDefaultServer()) {
-                    if (explicitDefault != null) {
-                        throw new IOException("Multiple default servers configured for port " + port);
+                    defaults.add(config);
+                }
+                for (String name : config.getServerNames()) {
+                    if (!"*".equals(name)) {
+                        namesOnPort.computeIfAbsent(name.toLowerCase(), ignored -> new ArrayList<>()).add(config);
                     }
-                    explicitDefault = config;
                 }
             }
-
-            if (explicitDefault != null) {
-                configurations.setDefaultServerForPort(port, explicitDefault);
-            } else if (!configsForPort.isEmpty()) {
-                // Deterministic fallback to first declared server
-                configurations.setDefaultServerForPort(port, configsForPort.get(0));
+            if (defaults.size() > 1) {
+                for (ServerConfig config : defaults) {
+                    rejected.put(config, "Multiple default servers configured for port " + port);
+                }
             }
-
-            // Check for conflicting server_name configured on the same port
-            Set<String> namesOnPort = new HashSet<>();
-            for (ServerConfig config : configsForPort) {
-                for (String sName : config.getServerNames()) {
-                    if (!sName.equals("*")) {
-                        if (!namesOnPort.add(sName)) {
-                            throw new IOException("Conflicting server_name '" + sName + "' configured for port " + port);
-                        }
+            for (Map.Entry<String, List<ServerConfig>> nameEntry : namesOnPort.entrySet()) {
+                if (nameEntry.getValue().size() > 1) {
+                    for (ServerConfig config : nameEntry.getValue()) {
+                        rejected.put(config, "Conflicting server_name '" + nameEntry.getKey() +
+                                "' configured for port " + port);
                     }
                 }
             }
         }
+
+        for (Map.Entry<ServerConfig, String> entry : rejected.entrySet()) {
+            String message = "Invalid server '" + entry.getKey().getServerName() + "': " + entry.getValue();
+            rejectedBlocks.add(message);
+            System.err.println("Skipping " + message);
+        }
+
+        ServerConfigurations valid = new ServerConfigurations();
+        for (ServerConfig config : candidates) {
+            if (!rejected.containsKey(config)) {
+                valid.addServerConfig(config);
+            }
+        }
+        if (valid.getAllConfigs().isEmpty()) {
+            if (!rejectedBlocks.isEmpty()) {
+                throw new IOException(rejectedBlocks.get(0));
+            }
+            throw new IOException("No valid server configurations found");
+        }
+
+        for (Integer port : valid.getAllPorts()) {
+            List<ServerConfig> servers = valid.getConfigsForPort(port);
+            ServerConfig selectedDefault = null;
+            for (ServerConfig config : servers) {
+                if (config.isDefaultServer()) {
+                    selectedDefault = config;
+                    break;
+                }
+            }
+            valid.setDefaultServerForPort(port, selectedDefault != null ? selectedDefault : servers.get(0));
+        }
+        return valid;
     }
 
     private static int parseSize(String value) {

@@ -2,6 +2,7 @@ package server;
 
 import java.io.IOException;
 import java.io.ByteArrayOutputStream;
+import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.channels.SocketChannel;
@@ -18,6 +19,8 @@ import handler.CGIHandler;
 import router.Route;
 import router.Router;
 import session.SessionManager;
+import session.Session;
+import session.Cookie;
 import config.ServerConfig;
 import config.ServerConfigurations;
 
@@ -34,6 +37,9 @@ public class Connection {
     private ByteArrayOutputStream accumulatedData;
     private boolean requestComplete;
     private int expectedBodySize;
+    private String responseSessionId;
+    private boolean sessionCookieApplied;
+    private boolean closed;
     private static final int MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB max accumulation
 
     public Connection(SocketChannel channel, ServerConfigurations configurations, int serverPort) {
@@ -46,6 +52,7 @@ public class Connection {
         this.accumulatedData = new ByteArrayOutputStream();
         this.requestComplete = false;
         this.expectedBodySize = -1;
+        ServerMetrics.connectionOpened();
     }
 
     // Backward compatibility constructor for single-server mode
@@ -64,12 +71,23 @@ public class Connection {
         this.accumulatedData = new ByteArrayOutputStream();
         this.requestComplete = false;
         this.expectedBodySize = -1;
+        ServerMetrics.connectionOpened();
     }
 
     public boolean read() throws IOException, PayloadTooLargeException {
         lastActiveTime = System.currentTimeMillis();
         readBuffer.clear();
-        int bytesRead = channel.read(readBuffer);
+        int bytesRead;
+        try {
+            bytesRead = channel.read(readBuffer);
+        } catch (IOException e) {
+            try {
+                close();
+            } catch (IOException ignored) {}
+            SocketException socketError = new SocketException("Client socket read failed");
+            socketError.initCause(e);
+            throw socketError;
+        }
         if (bytesRead == -1) {
             close();
             return false;
@@ -196,14 +214,33 @@ public class Connection {
             return;
         }
 
+        ServerMetrics.requestReceived();
+
         // Ensure server config is selected
         if (selectedConfig == null) {
             selectServerConfig(request);
         }
 
+        Session session = sessionManager.getOrCreateSession(request.getCookie(SessionManager.getSessionCookieName()));
+        request.setSession(session);
+        responseSessionId = session.getSessionId();
+        sessionCookieApplied = false;
+
         // Periodically cleanup expired sessions (every 100 requests approximately)
         if (Math.random() < 0.01) {
             sessionManager.cleanupExpiredSessions();
+        }
+
+        String requestPath = request.getPath();
+        int queryIndex = requestPath.indexOf('?');
+        if (queryIndex >= 0) {
+            requestPath = requestPath.substring(0, queryIndex);
+        }
+        if ("/__metrics".equals(requestPath)) {
+            writeBuffer = "GET".equalsIgnoreCase(request.getMethod())
+                    ? createMetricsResponse()
+                    : createErrorResponse(405, "Method Not Allowed");
+            return;
         }
 
         Router router = new Router();
@@ -323,14 +360,72 @@ public class Connection {
             return true;
         }
 
+        applySessionCookieHeader();
+
         channel.write(writeBuffer);
         return !writeBuffer.hasRemaining(); // Returns true when fully written
     }
 
     public void close() throws IOException {
-        if (channel != null && channel.isOpen()) {
-            channel.close();
+        if (closed) {
+            return;
         }
+        closed = true;
+        try {
+            if (channel != null && channel.isOpen()) {
+                channel.close();
+            }
+        } finally {
+            ServerMetrics.connectionClosed();
+        }
+    }
+
+    private ByteBuffer createMetricsResponse() {
+        byte[] body = ServerMetrics.renderPrometheus().getBytes(StandardCharsets.UTF_8);
+        String headers = "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/plain; version=0.0.4; charset=UTF-8\r\n" +
+                "Content-Length: " + body.length + "\r\n" +
+                "Connection: close\r\n\r\n";
+        byte[] headerBytes = headers.getBytes(StandardCharsets.UTF_8);
+        ByteBuffer response = ByteBuffer.allocate(headerBytes.length + body.length);
+        response.put(headerBytes).put(body).flip();
+        return response;
+    }
+
+    private void applySessionCookieHeader() {
+        if (sessionCookieApplied || responseSessionId == null || writeBuffer == null) {
+            return;
+        }
+
+        byte[] response = new byte[writeBuffer.remaining()];
+        writeBuffer.get(response);
+        int separator = -1;
+        for (int i = 0; i <= response.length - 4; i++) {
+            if (response[i] == '\r' && response[i + 1] == '\n' &&
+                    response[i + 2] == '\r' && response[i + 3] == '\n') {
+                separator = i;
+                break;
+            }
+        }
+        if (separator < 0) {
+            writeBuffer = ByteBuffer.wrap(response);
+            sessionCookieApplied = true;
+            return;
+        }
+
+        Cookie cookie = new Cookie(SessionManager.getSessionCookieName(), responseSessionId);
+        cookie.setPath("/");
+        cookie.setHttpOnly(true);
+        byte[] cookieHeader = ("Set-Cookie: " + cookie.toSetCookieHeader() + "\r\n")
+                .getBytes(StandardCharsets.UTF_8);
+        int insertAt = separator + 2;
+        ByteBuffer updated = ByteBuffer.allocate(response.length + cookieHeader.length);
+        updated.put(response, 0, insertAt);
+        updated.put(cookieHeader);
+        updated.put(response, insertAt, response.length - insertAt);
+        updated.flip();
+        writeBuffer = updated;
+        sessionCookieApplied = true;
     }
 
     public long getLastActiveTime() {

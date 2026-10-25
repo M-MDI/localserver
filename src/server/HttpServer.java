@@ -2,6 +2,7 @@ package server;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.SocketException;
 import java.nio.channels.*;
 import java.util.Iterator;
 import java.util.List;
@@ -31,12 +32,31 @@ public class HttpServer {
         running = true;
 
         List<Integer> allPorts = configurations.getAllPorts();
+        int boundPorts = 0;
+        List<String> failedPorts = new java.util.ArrayList<>();
         for (Integer port : allPorts) {
-            ServerSocketChannel serverChannel = ServerSocketChannel.open();
-            serverChannel.configureBlocking(false);
-            serverChannel.bind(new InetSocketAddress(port));
-            serverChannel.register(selector, SelectionKey.OP_ACCEPT, port);
-            System.out.println("Server listening on port " + port);
+            ServerSocketChannel serverChannel = null;
+            try {
+                serverChannel = ServerSocketChannel.open();
+                serverChannel.configureBlocking(false);
+                serverChannel.bind(new InetSocketAddress(port));
+                serverChannel.register(selector, SelectionKey.OP_ACCEPT, port);
+                boundPorts++;
+                System.out.println("Server listening on port " + port);
+            } catch (IOException e) {
+                failedPorts.add(port + ": " + e.getMessage());
+                System.err.println("Unable to bind port " + port + "; continuing with other ports: " + e.getMessage());
+                if (serverChannel != null) {
+                    try {
+                        serverChannel.close();
+                    } catch (IOException ignored) {}
+                }
+            }
+        }
+        if (boundPorts == 0) {
+            running = false;
+            selector.close();
+            throw new IOException("Unable to bind any configured port (" + String.join("; ", failedPorts) + ")");
         }
 
         System.out.println("LocalServer started with NIO selector");
@@ -75,17 +95,26 @@ public class HttpServer {
     }
 
     private void handleAccept(SelectionKey key) {
+        SocketChannel clientChannel = null;
+        Connection connection = null;
         try {
             ServerSocketChannel serverChannel = (ServerSocketChannel) key.channel();
-            SocketChannel clientChannel = serverChannel.accept();
+            clientChannel = serverChannel.accept();
 
             if (clientChannel != null) {
                 clientChannel.configureBlocking(false);
                 Integer port = (Integer) key.attachment();
-                Connection connection = new Connection(clientChannel, configurations, port);
+                connection = new Connection(clientChannel, configurations, port);
                 clientChannel.register(selector, SelectionKey.OP_READ, connection);
             }
         } catch (IOException e) {
+            if (connection != null) {
+                closeConnection(connection, key);
+            } else if (clientChannel != null) {
+                try {
+                    clientChannel.close();
+                } catch (IOException ignored) {}
+            }
             e.printStackTrace();
         }
     }
@@ -107,11 +136,11 @@ public class HttpServer {
             // If not complete, keep OP_READ interest to continue reading
         } catch (IOException e) {
             Connection connection = (Connection) key.attachment();
-            if (connection != null) {
+            if (connection != null && !isSocketFailure(e)) {
                 connection.prepareErrorResponse(400, "Bad Request");
                 key.interestOps(SelectionKey.OP_WRITE);
             } else {
-                key.cancel();
+                closeConnection(connection, key);
             }
         } catch (http.PayloadTooLargeException e) {
             Connection connection = (Connection) key.attachment();
@@ -147,8 +176,29 @@ public class HttpServer {
                 key.cancel();
             }
         } catch (IOException e) {
-            key.cancel();
+            closeConnection((Connection) key.attachment(), key);
             e.printStackTrace();
+        }
+    }
+
+    private boolean isSocketFailure(IOException error) {
+        return error instanceof SocketException ||
+                error instanceof ClosedChannelException ||
+                error instanceof AsynchronousCloseException;
+    }
+
+    private void closeConnection(Connection connection, SelectionKey key) {
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (IOException ignored) {}
+        } else if (key != null) {
+            try {
+                key.channel().close();
+            } catch (IOException ignored) {}
+        }
+        if (key != null) {
+            key.cancel();
         }
     }
 
@@ -158,12 +208,7 @@ public class HttpServer {
             if (key.isValid() && key.attachment() instanceof Connection) {
                 Connection connection = (Connection) key.attachment();
                 if (now - connection.getLastActiveTime() > CONNECTION_TIMEOUT_MS) {
-                    try {
-                        connection.close();
-                        key.cancel();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
+                    closeConnection(connection, key);
                 }
             }
         }
@@ -175,9 +220,13 @@ public class HttpServer {
             selector.wakeup();
             try {
                 for (SelectionKey key : selector.keys()) {
-                    try {
-                        key.channel().close();
-                    } catch (IOException ignored) {}
+                    if (key.attachment() instanceof Connection) {
+                        closeConnection((Connection) key.attachment(), key);
+                    } else {
+                        try {
+                            key.channel().close();
+                        } catch (IOException ignored) {}
+                    }
                 }
                 selector.close();
             } catch (IOException ignored) {}

@@ -3,6 +3,7 @@ package http;
 import java.util.HashMap;
 import java.util.Map;
 import session.Cookie;
+import session.Session;
 
 public class HttpRequest {
     private String method;
@@ -11,6 +12,7 @@ public class HttpRequest {
     private Map<String, String> headers;
     private String body;
     private Map<String, String> cookies;
+    private Session session;
     private int contentLength;
 
     public HttpRequest() {
@@ -92,6 +94,14 @@ public class HttpRequest {
         if (cookieHeader != null) {
             this.cookies = Cookie.parseCookieHeader(cookieHeader);
         }
+    }
+
+    public Session getSession() {
+        return session;
+    }
+
+    public void setSession(Session session) {
+        this.session = session;
     }
 
     public int getContentLength() {

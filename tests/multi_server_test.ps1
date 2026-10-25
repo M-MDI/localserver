@@ -421,6 +421,90 @@ server {
     Remove-Item "config\test_shared_nobind.conf" -Force -ErrorAction SilentlyContinue
 }
 
+# Test 10: An invalid server block does not prevent valid blocks from starting
+Write-Host "`nTest 10: Valid server remains available when a sibling block is invalid" -ForegroundColor Yellow
+$proc = $null
+try {
+    $configContent = @"
+server {
+    listen 8089
+    name survivor
+    server_name survivor.local
+    default_server
+    document_root ./www/server1
+}
+server {
+    listen 8089
+    name invalid
+    server_name invalid.local
+    document_root ./www/does_not_exist
+}
+"@
+    [System.IO.File]::WriteAllText("config\test_invalid_sibling.conf", $configContent, [System.Text.Encoding]::UTF8)
+    $proc = Start-Process -FilePath "java" -ArgumentList "-cp bin Main config/test_invalid_sibling.conf" -PassThru -NoNewWindow -RedirectStandardOutput "test_output.txt" -RedirectStandardError "test_error.txt"
+
+    $ready = $false
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if ($proc.HasExited) { break }
+        try {
+            $response = Invoke-WebRequest -Uri "http://localhost:8089/" -Headers @{"Host"="survivor.local"} -UseBasicParsing -TimeoutSec 1
+            $ready = $response.StatusCode -eq 200 -and $response.Content -match "Server 1"
+            if ($ready) { break }
+        } catch {
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    $outContent = if (Test-Path "test_output.txt") { Get-Content "test_output.txt" -Raw } else { "" }
+    $errContent = if (Test-Path "test_error.txt") { Get-Content "test_error.txt" -Raw } else { "" }
+    $invalidSkipped = ($outContent + $errContent) -match "Skipping Invalid server block"
+
+    if ($ready -and $invalidSkipped) {
+        Write-Host "  PASS: Invalid sibling was skipped and the valid server served requests" -ForegroundColor Green
+        $passCount++
+    } else {
+        Write-Host "  FAIL: Valid-server isolation failed (ready: $ready, invalid skipped: $invalidSkipped)" -ForegroundColor Red
+        $failCount++
+    }
+} catch {
+    Write-Host "  FAIL: Test 10 failed: $_" -ForegroundColor Red
+    $failCount++
+} finally {
+    Stop-ServerProcess $proc
+    Remove-Item "config\test_invalid_sibling.conf" -Force -ErrorAction SilentlyContinue
+}
+
+# Test 11: A repeated port in one server block is rejected
+Write-Host "`nTest 11: Duplicate listen port in one server block is rejected" -ForegroundColor Yellow
+$proc = $null
+try {
+    $configContent = @"
+server {
+    listen 8090 8090
+    name duplicate_port
+    document_root ./www/server1
+}
+"@
+    [System.IO.File]::WriteAllText("config\test_duplicate_listen.conf", $configContent, [System.Text.Encoding]::UTF8)
+    $proc = Start-Process -FilePath "java" -ArgumentList "-cp bin Main config/test_duplicate_listen.conf" -PassThru -NoNewWindow -RedirectStandardOutput "test_output.txt" -RedirectStandardError "test_error.txt"
+    $proc.WaitForExit(5000) | Out-Null
+    $outContent = if (Test-Path "test_output.txt") { Get-Content "test_output.txt" -Raw } else { "" }
+    $errContent = if (Test-Path "test_error.txt") { Get-Content "test_error.txt" -Raw } else { "" }
+    $rejected = ($outContent + $errContent) -match "Duplicate listen port 8090"
+    if ($proc.HasExited -and $proc.ExitCode -ne 0 -and $rejected) {
+        Write-Host "  PASS: Duplicate port declaration was rejected with a clear error" -ForegroundColor Green
+        $passCount++
+    } else {
+        Write-Host "  FAIL: Duplicate port was not rejected (exit: $($proc.ExitCode), message: $outContent $errContent)" -ForegroundColor Red
+        $failCount++
+    }
+} catch {
+    Write-Host "  FAIL: Test 11 failed: $_" -ForegroundColor Red
+    $failCount++
+} finally {
+    Stop-ServerProcess $proc
+    Remove-Item "config\test_duplicate_listen.conf" -Force -ErrorAction SilentlyContinue
+}
+
 # Cleanup test files
 Remove-Item "test_output.txt" -Force -ErrorAction SilentlyContinue
 Remove-Item "test_error.txt" -Force -ErrorAction SilentlyContinue

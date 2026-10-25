@@ -81,5 +81,6 @@ build/
 !**/src/test/**/build/
 
 # Application specific
-www/uploads/
+www/uploads/*
+!www/uploads/.gitkeep
 *.bak
