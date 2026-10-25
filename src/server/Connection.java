@@ -219,6 +219,12 @@ public class Connection {
             router.addRoute(cgiRoute);
         }
 
+        if (selectedConfig != null && selectedConfig.hasRedirects()) {
+            for (Route redir : selectedConfig.getRedirects()) {
+                router.addRoute(redir);
+            }
+        }
+
         // Reject paths with ".." to prevent path traversal attacks
         if (request.getPath().contains("..")) {
             writeBuffer = createErrorResponse(403, "Forbidden");
@@ -231,7 +237,7 @@ public class Connection {
             if (!route.isMethodAccepted(request.getMethod())) {
                 writeBuffer = createErrorResponse(405, "Method Not Allowed");
             } else if (route.isRedirect()) {
-                writeBuffer = createRedirectResponse(route.getRedirectPath());
+                writeBuffer = createRedirectResponse(route.getRedirectCode(), route.getRedirectPath());
             } else if (route.isUpload()) {
                 UploadHandler uploadHandler = new UploadHandler(route.getDocumentRoot(), selectedConfig, route.getPath());
                 HttpResponse response = uploadHandler.handle(request);
@@ -327,8 +333,39 @@ public class Connection {
     }
 
     private ByteBuffer createRedirectResponse(String location) {
-        String body = "302 Found\nRedirecting to " + location;
-        String response = "HTTP/1.1 302 Found\r\n" +
+        return createRedirectResponse(302, location);
+    }
+
+    private ByteBuffer createRedirectResponse(int statusCode, String location) {
+        if (location == null || location.contains("\r") || location.contains("\n")) {
+            return createErrorResponse(500, "Internal Server Error");
+        }
+
+        String statusText;
+        switch (statusCode) {
+            case 301:
+                statusText = "Moved Permanently";
+                break;
+            case 302:
+                statusText = "Found";
+                break;
+            case 303:
+                statusText = "See Other";
+                break;
+            case 307:
+                statusText = "Temporary Redirect";
+                break;
+            case 308:
+                statusText = "Permanent Redirect";
+                break;
+            default:
+                statusText = "Found";
+                statusCode = 302;
+                break;
+        }
+
+        String body = statusCode + " " + statusText + "\nRedirecting to " + location;
+        String response = "HTTP/1.1 " + statusCode + " " + statusText + "\r\n" +
                 "Location: " + location + "\r\n" +
                 "Content-Type: text/plain\r\n" +
                 "Content-Length: " + body.length() + "\r\n" +

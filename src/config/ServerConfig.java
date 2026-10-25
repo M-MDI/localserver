@@ -19,6 +19,7 @@ public class ServerConfig {
     private boolean isDefaultServer;
     private String indexFile;
     private List<Route> routes;
+    private List<Route> redirects;
 
     public ServerConfig() {
         this.ports = new ArrayList<>();
@@ -29,6 +30,7 @@ public class ServerConfig {
         this.isDefaultServer = false;
         this.indexFile = "index.html";
         this.routes = new ArrayList<>();
+        this.redirects = new ArrayList<>();
     }
 
     public List<Integer> getPorts() {
@@ -121,5 +123,17 @@ public class ServerConfig {
 
     public boolean hasRoutes() {
         return routes != null && !routes.isEmpty();
+    }
+
+    public List<Route> getRedirects() {
+        return redirects;
+    }
+
+    public void addRedirect(Route redirect) {
+        this.redirects.add(redirect);
+    }
+
+    public boolean hasRedirects() {
+        return redirects != null && !redirects.isEmpty();
     }
 }

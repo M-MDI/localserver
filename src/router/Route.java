@@ -9,6 +9,14 @@ public class Route {
     private final String type; // "root", "static", "upload", "cgi"
     private final Set<String> acceptedMethods;
     private String redirectPath;
+    private int redirectCode = 302;
+
+    public static Route createRedirect(String path, String target, int statusCode) {
+        Route route = new Route(path, "", "redirect");
+        route.setRedirectPath(target);
+        route.setRedirectCode(statusCode);
+        return route;
+    }
 
     public Route(String path, String documentRoot) {
         this(path, documentRoot, "root");
@@ -74,8 +82,16 @@ public class Route {
         return redirectPath;
     }
 
+    public void setRedirectCode(int redirectCode) {
+        this.redirectCode = redirectCode;
+    }
+
+    public int getRedirectCode() {
+        return redirectCode;
+    }
+
     public boolean isRedirect() {
-        return redirectPath != null && !redirectPath.isEmpty();
+        return "redirect".equalsIgnoreCase(type) || (redirectPath != null && !redirectPath.isEmpty());
     }
 
     public boolean matches(String requestPath) {

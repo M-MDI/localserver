@@ -33,8 +33,9 @@ public class Router {
 
         for (Route route : routes) {
             if (route.matches(path)) {
-                if (route.getPath().length() > maxLen) {
-                    maxLen = route.getPath().length();
+                int len = route.getPath().length();
+                if (len > maxLen || (len == maxLen && route.isRedirect() && (bestMatch == null || !bestMatch.isRedirect()))) {
+                    maxLen = len;
                     bestMatch = route;
                 }
             }

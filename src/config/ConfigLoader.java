@@ -82,6 +82,7 @@ public class ConfigLoader {
         List<Integer> ports = new ArrayList<>();
         String documentRoot = null;
         List<String> rawRoutes = new ArrayList<>();
+        List<String> rawRedirects = new ArrayList<>();
 
         for (String line : lines) {
             line = line.trim();
@@ -100,6 +101,9 @@ public class ConfigLoader {
             if (line.equalsIgnoreCase("route")) {
                 throw new IOException("Malformed route directive: missing arguments");
             }
+            if (line.equalsIgnoreCase("redirect")) {
+                throw new IOException("Malformed redirect directive: missing arguments");
+            }
 
             if (line.endsWith(";")) {
                 line = line.substring(0, line.length() - 1).trim();
@@ -113,6 +117,17 @@ public class ConfigLoader {
                     routeVal = line.substring(5).trim();
                 }
                 rawRoutes.add(routeVal);
+                continue;
+            }
+
+            if (line.startsWith("redirect ") || line.startsWith("redirect\t") || line.startsWith("redirect=")) {
+                String redirVal;
+                if (line.startsWith("redirect=")) {
+                    redirVal = line.substring(9).trim();
+                } else {
+                    redirVal = line.substring(8).trim();
+                }
+                rawRedirects.add(redirVal);
                 continue;
             }
 
@@ -209,6 +224,11 @@ public class ConfigLoader {
             parseRouteDirective(routeVal, config);
         }
 
+        // Parse redirects if any defined
+        for (String redirVal : rawRedirects) {
+            parseRedirectDirective(redirVal, config);
+        }
+
         return config;
     }
 
@@ -276,6 +296,7 @@ public class ConfigLoader {
         boolean isDefault = false;
         boolean nameExplicitlySet = false;
         List<String> rawRoutes = new ArrayList<>();
+        List<String> rawRedirects = new ArrayList<>();
 
         for (int i = start + 1; i < end; i++) {
             String line = lines.get(i).trim();
@@ -307,6 +328,8 @@ public class ConfigLoader {
                     isDefault = true;
                 } else if (parts[0].equalsIgnoreCase("route")) {
                     throw new IOException("Malformed route directive: missing arguments");
+                } else if (parts[0].equalsIgnoreCase("redirect")) {
+                    throw new IOException("Malformed redirect directive: missing arguments");
                 }
                 continue;
             }
@@ -390,6 +413,8 @@ public class ConfigLoader {
                 parseErrorPageDirective(key, value, config);
             } else if (key.equalsIgnoreCase("route")) {
                 rawRoutes.add(value);
+            } else if (key.equalsIgnoreCase("redirect")) {
+                rawRedirects.add(value);
             }
         }
 
@@ -441,7 +466,83 @@ public class ConfigLoader {
             parseRouteDirective(routeVal, config);
         }
 
+        // Parse redirects for this server
+        for (String redirVal : rawRedirects) {
+            parseRedirectDirective(redirVal, config);
+        }
+
         return config;
+    }
+
+    private static void parseRedirectDirective(String value, ServerConfig config) throws IOException {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IOException("Malformed redirect directive: missing arguments");
+        }
+
+        String[] tokens = value.trim().split("\\s+");
+        if (tokens.length < 2) {
+            throw new IOException("Malformed redirect directive '" + value + "' (missing destination)");
+        }
+
+        String sourcePath = tokens[0].trim();
+        if (!sourcePath.startsWith("/")) {
+            throw new IOException("Invalid redirect path '" + sourcePath + "' (must start with '/')");
+        }
+
+        if (sourcePath.contains("..")) {
+            throw new IOException("Path traversal not allowed in redirect path: " + sourcePath);
+        }
+
+        String normalizedSource = (sourcePath.length() > 1 && sourcePath.endsWith("/"))
+                ? sourcePath.substring(0, sourcePath.length() - 1)
+                : sourcePath;
+
+        // Check for duplicate redirect path in this server block
+        for (Route existing : config.getRedirects()) {
+            if (existing.getPath().equals(normalizedSource)) {
+                throw new IOException("Duplicate redirect path '" + sourcePath + "' in server " + config.getServerName());
+            }
+        }
+
+        String target = tokens[1].trim();
+        if (target.endsWith(";")) {
+            target = target.substring(0, target.length() - 1).trim();
+        }
+        if (target.isEmpty()) {
+            throw new IOException("Malformed redirect directive: missing target");
+        }
+
+        // Security check: reject CR, LF, null byte, and control characters to prevent header injection
+        String lowerTarget = target.toLowerCase();
+        if (target.contains("\r") || target.contains("\n") || target.contains("\0") ||
+            target.contains("\\r") || target.contains("\\n") ||
+            lowerTarget.contains("%0d") || lowerTarget.contains("%0a") || lowerTarget.contains("%00")) {
+            throw new IOException("Invalid redirect target (header injection attempt detected): " + target);
+        }
+        for (char c : target.toCharArray()) {
+            if (c < 32 || c == 127) {
+                throw new IOException("Invalid character in redirect target: " + target);
+            }
+        }
+
+        int statusCode = 302; // default
+        if (tokens.length >= 3) {
+            String codeStr = tokens[2].trim();
+            if (codeStr.endsWith(";")) {
+                codeStr = codeStr.substring(0, codeStr.length() - 1).trim();
+            }
+            try {
+                statusCode = Integer.parseInt(codeStr);
+            } catch (NumberFormatException e) {
+                throw new IOException("Invalid redirect status code: '" + tokens[2] + "'");
+            }
+            if (statusCode != 301 && statusCode != 302 && statusCode != 303 && statusCode != 307 && statusCode != 308) {
+                throw new IOException("Unsupported redirect status code: " + statusCode + " (must be 301, 302, 303, 307, or 308)");
+            }
+        }
+
+        Route redirectRoute = Route.createRedirect(normalizedSource, target, statusCode);
+        config.addRedirect(redirectRoute);
     }
 
     private static void parseRouteDirective(String value, ServerConfig config) throws IOException {
