@@ -230,6 +230,9 @@ public class CGIHandler {
                             response.setHeader(name, value);
                         }
                     }
+                } else {
+                    parsingHeaders = false;
+                    bodyBuilder.append(line).append("\n");
                 }
             } else {
                 bodyBuilder.append(line).append("\n");

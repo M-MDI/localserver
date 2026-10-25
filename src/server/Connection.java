@@ -86,6 +86,12 @@ public class Connection {
                 throw new IOException("Request too large");
             }
 
+            // Headers must be fully received before parsing
+            int headerEnd = findHeaderEnd(accumulatedData.toByteArray());
+            if (headerEnd < 0) {
+                return false;
+            }
+
             // Try to determine if we have a complete request
             ByteBuffer tempBuffer = ByteBuffer.wrap(accumulatedData.toByteArray());
             HttpRequest tempRequest = HttpParser.parseHeadersOnly(tempBuffer);
@@ -95,6 +101,10 @@ public class Connection {
 
                 String contentLength = tempRequest.getHeader("Content-Length");
                 String transferEncoding = tempRequest.getHeader("Transfer-Encoding");
+
+                if (contentLength != null && transferEncoding != null) {
+                    throw new IOException("Conflicting framing headers: Transfer-Encoding and Content-Length");
+                }
 
                 int maxAllowedBody = (selectedConfig != null) ? selectedConfig.getMaxBodySize() : MAX_BUFFER_SIZE;
 
@@ -107,6 +117,8 @@ public class Connection {
                             requestComplete = true;
                         }
                     } catch (PayloadTooLargeException e) {
+                        throw e;
+                    } catch (IOException e) {
                         throw e;
                     } catch (Exception e) {
                         // Not complete yet
@@ -125,12 +137,9 @@ public class Connection {
                     }
 
                     // Check if we have the complete body
-                    int headerEnd = findHeaderEnd(accumulatedData.toByteArray());
-                    if (headerEnd >= 0) {
-                        int bodyReceived = accumulatedData.size() - headerEnd - 4; // -4 for \r\n\r\n
-                        if (bodyReceived >= expectedBodySize) {
-                            requestComplete = true;
-                        }
+                    int bodyReceived = accumulatedData.size() - headerEnd - 4; // -4 for \r\n\r\n
+                    if (bodyReceived >= expectedBodySize) {
+                        requestComplete = true;
                     }
                 } else {
                     // No body expected, request is complete after headers

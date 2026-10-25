@@ -1,5 +1,6 @@
 package http;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -16,11 +17,11 @@ public class HttpParser {
         return MAX_BODY_SIZE;
     }
 
-    public static HttpRequest parse(ByteBuffer buffer) throws PayloadTooLargeException {
+    public static HttpRequest parse(ByteBuffer buffer) throws PayloadTooLargeException, IOException {
         return parse(buffer, MAX_BODY_SIZE);
     }
 
-    public static HttpRequest parse(ByteBuffer buffer, int maxBodySize) throws PayloadTooLargeException {
+    public static HttpRequest parse(ByteBuffer buffer, int maxBodySize) throws PayloadTooLargeException, IOException {
         HttpRequest request = new HttpRequest();
         String requestLine = readLine(buffer);
         if (requestLine == null || requestLine.isEmpty()) {
@@ -38,7 +39,12 @@ public class HttpParser {
 
         Map<String, String> headers = new HashMap<>();
         String line;
-        while ((line = readLine(buffer)) != null && !line.isEmpty()) {
+        boolean headersEnded = false;
+        while ((line = readLine(buffer)) != null) {
+            if (line.isEmpty()) {
+                headersEnded = true;
+                break;
+            }
             int colonIndex = line.indexOf(':');
             if (colonIndex > 0) {
                 String name = line.substring(0, colonIndex).trim();
@@ -46,8 +52,17 @@ public class HttpParser {
                 headers.put(name, value);
             }
         }
+        if (!headersEnded) {
+            return null; // Incomplete headers
+        }
+
         request.setHeaders(headers);
         request.parseCookies();
+
+        // Reject conflicting framing headers (RFC 9112 Section 6.1)
+        if (headers.containsKey("Transfer-Encoding") && headers.containsKey("Content-Length")) {
+            throw new IOException("Conflicting framing headers: Transfer-Encoding and Content-Length");
+        }
 
         // Parse Body
         if (headers.containsKey("Transfer-Encoding") && headers.get("Transfer-Encoding").contains("chunked")) {
@@ -56,7 +71,7 @@ public class HttpParser {
             try {
                 int contentLength = Integer.parseInt(headers.get("Content-Length"));
                 if (contentLength < 0) {
-                    return null; // Invalid Content-Length - malformed request
+                    throw new IOException("Invalid Content-Length: negative");
                 }
                 if (contentLength > maxBodySize) {
                     throw new PayloadTooLargeException();
@@ -72,8 +87,7 @@ public class HttpParser {
                 }
                 // If contentLength is 0, body remains null (will be caught by UploadHandler)
             } catch (NumberFormatException e) {
-                // Invalid content length - treat as malformed
-                return null;
+                throw new IOException("Invalid Content-Length");
             }
         }
 
@@ -98,7 +112,12 @@ public class HttpParser {
 
         Map<String, String> headers = new HashMap<>();
         String line;
-        while ((line = readLine(buffer)) != null && !line.isEmpty()) {
+        boolean headersEnded = false;
+        while ((line = readLine(buffer)) != null) {
+            if (line.isEmpty()) {
+                headersEnded = true;
+                break;
+            }
             int colonIndex = line.indexOf(':');
             if (colonIndex > 0) {
                 String name = line.substring(0, colonIndex).trim();
@@ -106,11 +125,15 @@ public class HttpParser {
                 headers.put(name, value);
             }
         }
+        if (!headersEnded) {
+            return null;
+        }
+
         request.setHeaders(headers);
         return request;
     }
 
-    private static String parseChunkedBody(ByteBuffer buffer, int maxBodySize) throws PayloadTooLargeException {
+    private static String parseChunkedBody(ByteBuffer buffer, int maxBodySize) throws PayloadTooLargeException, IOException {
         StringBuilder body = new StringBuilder();
         int totalSize = 0;
         while (true) {
@@ -124,7 +147,7 @@ public class HttpParser {
             try {
                 int chunkSize = Integer.parseInt(hexSize.trim(), 16);
                 if (chunkSize < 0) {
-                    return null; // Invalid chunk size
+                    throw new IOException("Invalid chunk size: negative");
                 }
                 if (chunkSize == 0) {
                     readLine(buffer); // Consume trailing \r\n
@@ -145,7 +168,7 @@ public class HttpParser {
                     return null; // Incomplete chunk
                 }
             } catch (NumberFormatException e) {
-                return null; // Invalid chunk size - malformed
+                throw new IOException("Invalid chunk size: " + hexSize);
             }
         }
         return body.toString();
