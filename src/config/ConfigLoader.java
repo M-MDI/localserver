@@ -10,6 +10,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import router.Route;
 
 public class ConfigLoader {
     private static final String DEFAULT_CONFIG_PATH = "config/server.conf";
@@ -80,6 +81,7 @@ public class ConfigLoader {
         ServerConfig config = new ServerConfig();
         List<Integer> ports = new ArrayList<>();
         String documentRoot = null;
+        List<String> rawRoutes = new ArrayList<>();
 
         for (String line : lines) {
             line = line.trim();
@@ -93,6 +95,12 @@ public class ConfigLoader {
                 if (line.isEmpty()) {
                     continue;
                 }
+            }
+
+            if (line.startsWith("route ") || line.startsWith("route=")) {
+                String routeVal = line.startsWith("route=") ? line.substring(6).trim() : line.substring(6).trim();
+                rawRoutes.add(routeVal);
+                continue;
             }
 
             String[] parts = line.split("=", 2);
@@ -183,6 +191,11 @@ public class ConfigLoader {
             config.setErrorPage(entry.getKey(), errorPath.toString());
         }
 
+        // Parse routes if any defined
+        for (String routeVal : rawRoutes) {
+            parseRouteDirective(routeVal, config);
+        }
+
         return config;
     }
 
@@ -249,6 +262,7 @@ public class ConfigLoader {
         Set<String> serverNames = new HashSet<>();
         boolean isDefault = false;
         boolean nameExplicitlySet = false;
+        List<String> rawRoutes = new ArrayList<>();
 
         for (int i = start + 1; i < end; i++) {
             String line = lines.get(i).trim();
@@ -276,9 +290,10 @@ public class ConfigLoader {
 
             String[] parts = line.split("\\s+", 2);
             if (parts.length < 2) {
-                // Check if single word directive like default_server
                 if (parts[0].equalsIgnoreCase("default_server")) {
                     isDefault = true;
+                } else if (parts[0].equalsIgnoreCase("route")) {
+                    throw new IOException("Malformed route directive: missing arguments");
                 }
                 continue;
             }
@@ -287,7 +302,6 @@ public class ConfigLoader {
             String value = parts[1].trim();
 
             if (key.equalsIgnoreCase("listen")) {
-                // value might be "8080 default_server" or "8080 8081" or "8080"
                 if (value.toLowerCase().contains("default_server")) {
                     isDefault = true;
                     value = value.replaceAll("(?i)\\bdefault_server\\b", "").trim();
@@ -310,7 +324,6 @@ public class ConfigLoader {
                     }
                 }
             } else if (key.equalsIgnoreCase("server_name")) {
-                // May specify multiple server names on one line
                 String[] names = value.split("\\s+");
                 for (String nameToken : names) {
                     nameToken = normalizeServerNameToken(nameToken);
@@ -362,6 +375,8 @@ public class ConfigLoader {
                 config.setIndexFile(value);
             } else if (key.equalsIgnoreCase("error_page") || key.startsWith("error_page")) {
                 parseErrorPageDirective(key, value, config);
+            } else if (key.equalsIgnoreCase("route")) {
+                rawRoutes.add(value);
             }
         }
 
@@ -408,12 +423,164 @@ public class ConfigLoader {
             config.setErrorPage(entry.getKey(), errorPath.toString());
         }
 
+        // Parse routes for this server
+        for (String routeVal : rawRoutes) {
+            parseRouteDirective(routeVal, config);
+        }
+
         return config;
+    }
+
+    private static void parseRouteDirective(String value, ServerConfig config) throws IOException {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IOException("Malformed route directive: missing arguments");
+        }
+
+        String[] tokens = value.trim().split("\\s+");
+        if (tokens.length < 2) {
+            throw new IOException("Malformed route directive '" + value + "' (expected 'route <path> <action/dir>')");
+        }
+
+        String routePath = tokens[0].trim();
+        if (!routePath.startsWith("/")) {
+            throw new IOException("Invalid route path '" + routePath + "' (must start with '/')");
+        }
+
+        // Check for duplicate route path in this server block
+        for (Route existing : config.getRoutes()) {
+            if (existing.getPath().equals(routePath)) {
+                throw new IOException("Duplicate route path '" + routePath + "' in server " + config.getServerName());
+            }
+        }
+
+        String actionOrDir = tokens[1].trim();
+        String type = "root";
+        String docRoot = null;
+        List<String> methods = new ArrayList<>();
+
+        if (actionOrDir.equalsIgnoreCase("root") || actionOrDir.equalsIgnoreCase("static")) {
+            type = "root";
+            if (tokens.length > 2 && !isHttpMethod(tokens[2])) {
+                docRoot = tokens[2];
+                for (int i = 3; i < tokens.length; i++) {
+                    extractMethods(tokens[i], methods);
+                }
+            } else {
+                for (int i = 2; i < tokens.length; i++) {
+                    extractMethods(tokens[i], methods);
+                }
+            }
+        } else if (actionOrDir.equalsIgnoreCase("upload")) {
+            type = "upload";
+            if (tokens.length > 2 && !isHttpMethod(tokens[2])) {
+                docRoot = tokens[2];
+                for (int i = 3; i < tokens.length; i++) {
+                    extractMethods(tokens[i], methods);
+                }
+            } else {
+                for (int i = 2; i < tokens.length; i++) {
+                    extractMethods(tokens[i], methods);
+                }
+            }
+        } else if (actionOrDir.equalsIgnoreCase("cgi")) {
+            type = "cgi";
+            if (tokens.length > 2 && !isHttpMethod(tokens[2])) {
+                docRoot = tokens[2];
+                for (int i = 3; i < tokens.length; i++) {
+                    extractMethods(tokens[i], methods);
+                }
+            } else {
+                for (int i = 2; i < tokens.length; i++) {
+                    extractMethods(tokens[i], methods);
+                }
+            }
+        } else {
+            // Check if actionOrDir looks like a directory path
+            Path projectDir = Paths.get(".").toAbsolutePath().normalize();
+            Path checkPath = Paths.get(actionOrDir);
+            if (!checkPath.isAbsolute()) {
+                checkPath = projectDir.resolve(checkPath).toAbsolutePath().normalize();
+            }
+            if (Files.exists(checkPath) || actionOrDir.contains("/") || actionOrDir.contains("\\") || actionOrDir.startsWith(".")) {
+                type = "root";
+                docRoot = actionOrDir;
+                for (int i = 2; i < tokens.length; i++) {
+                    extractMethods(tokens[i], methods);
+                }
+            } else {
+                throw new IOException("Invalid route action or directory '" + actionOrDir + "'");
+            }
+        }
+
+        // Resolve document root
+        Path projectDir = Paths.get(".").toAbsolutePath().normalize();
+        Path resolvedDir;
+        if (docRoot != null) {
+            resolvedDir = Paths.get(docRoot);
+            if (!resolvedDir.isAbsolute()) {
+                resolvedDir = projectDir.resolve(resolvedDir).toAbsolutePath().normalize();
+            } else {
+                resolvedDir = resolvedDir.normalize();
+            }
+            if (!Files.exists(resolvedDir)) {
+                throw new IOException("Route document root does not exist: " + resolvedDir);
+            }
+            if (!Files.isDirectory(resolvedDir)) {
+                throw new IOException("Route document root is not a directory: " + resolvedDir);
+            }
+        } else {
+            // Default based on server's document root
+            String serverRoot = config.getDocumentRoot();
+            if (serverRoot == null) {
+                serverRoot = DEFAULT_DOCUMENT_ROOT;
+            }
+            Path base = Paths.get(serverRoot).toAbsolutePath().normalize();
+            if (type.equals("upload")) {
+                Path uPath = base.resolve("uploads");
+                resolvedDir = Files.exists(uPath) ? uPath : base;
+            } else if (type.equals("cgi")) {
+                Path cPath = base.resolve("cgi-bin");
+                resolvedDir = Files.exists(cPath) ? cPath : base;
+            } else {
+                // Static route: check if base has subfolder matching routePath
+                String sub = routePath.startsWith("/") ? routePath.substring(1) : routePath;
+                Path subPath = base.resolve(sub);
+                resolvedDir = (Files.exists(subPath) && Files.isDirectory(subPath)) ? subPath : base;
+            }
+        }
+
+        Route route = new Route(routePath, resolvedDir.toString(), type);
+        for (String m : methods) {
+            route.addAcceptedMethod(m);
+        }
+        if (type.equals("upload") && methods.isEmpty()) {
+            route.addAcceptedMethod("POST");
+        }
+
+        config.addRoute(route);
+    }
+
+    private static boolean isHttpMethod(String token) {
+        if (token == null) return false;
+        String upper = token.toUpperCase();
+        return upper.equals("GET") || upper.equals("POST") || upper.equals("DELETE") || 
+               upper.equals("HEAD") || upper.equals("PUT") || upper.startsWith("METHODS=");
+    }
+
+    private static void extractMethods(String token, List<String> methods) {
+        if (token.toUpperCase().startsWith("METHODS=")) {
+            token = token.substring(8);
+        }
+        for (String part : token.split("[,;\\|]")) {
+            part = part.trim().toUpperCase();
+            if (!part.isEmpty()) {
+                methods.add(part);
+            }
+        }
     }
 
     private static String normalizeServerNameToken(String token) {
         token = token.trim();
-        // Remove trailing port if present
         int colon = token.indexOf(':');
         if (colon >= 0) {
             token = token.substring(0, colon);
@@ -426,7 +593,6 @@ public class ConfigLoader {
         String path = null;
 
         if (key.equalsIgnoreCase("error_page")) {
-            // value could be "404 /path" or "404=/path" or "404 = /path"
             String normalized = value.replace('=', ' ').trim();
             String[] parts = normalized.split("\\s+", 2);
             if (parts.length == 2) {
@@ -438,7 +604,6 @@ public class ConfigLoader {
                 }
             }
         } else {
-            // key could be "error_page 404" with value "= /path" or "/path"
             String[] keyParts = key.split("\\s+");
             if (keyParts.length == 2) {
                 try {

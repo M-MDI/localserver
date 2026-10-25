@@ -15,8 +15,16 @@ public class Router {
         routes.add(route);
     }
 
+    public List<Route> getRoutes() {
+        return routes;
+    }
+
     public void setDefaultRoute(Route route) {
         this.defaultRoute = route;
+    }
+
+    public Route getDefaultRoute() {
+        return defaultRoute;
     }
 
     public Route resolve(String path) {

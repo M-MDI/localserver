@@ -19,16 +19,23 @@ import java.util.Map;
 public class CGIHandler {
     private final String cgiDirectory;
     private final ServerConfig config;
+    private final String routePrefix;
     private static final long CGI_TIMEOUT_MS = 5000; // 5 second timeout
 
     public CGIHandler(String cgiDirectory, ServerConfig config) {
+        this(cgiDirectory, config, "/cgi-bin");
+    }
+
+    public CGIHandler(String cgiDirectory, ServerConfig config, String routePrefix) {
         this.cgiDirectory = cgiDirectory;
         this.config = config;
+        this.routePrefix = (routePrefix != null && !routePrefix.isEmpty()) ? routePrefix : "/cgi-bin";
     }
 
     public HttpResponse handle(HttpRequest request) {
         String requestPath = request.getPath();
-        if (requestPath == null || !requestPath.startsWith("/cgi-bin/")) {
+        String prefixWithSlash = routePrefix.endsWith("/") ? routePrefix : routePrefix + "/";
+        if (requestPath == null || (!requestPath.equals(routePrefix) && !requestPath.startsWith(prefixWithSlash))) {
             return createErrorResponse(404, "Not Found");
         }
 
@@ -37,7 +44,7 @@ public class CGIHandler {
             return createErrorResponse(403, "Forbidden - Path traversal detected");
         }
 
-        String pathAfterCgiBin = requestPath.substring("/cgi-bin/".length());
+        String pathAfterCgiBin = requestPath.startsWith(prefixWithSlash) ? requestPath.substring(prefixWithSlash.length()) : "";
         if (pathAfterCgiBin.isEmpty()) {
             return createErrorResponse(404, "Not Found");
         }
@@ -71,22 +78,11 @@ public class CGIHandler {
                 return createErrorResponse(404, "Not Found - Script not found");
             }
 
-            // Skip executable check on Windows as Files.isExecutable() doesn't work reliably for scripts
-            // The interpreter will handle execution; if the script is malformed, it will fail at runtime
-            // String osName = System.getProperty("os.name").toLowerCase();
-            // if (!osName.contains("win") && !Files.isExecutable(scriptPath)) {
-            //     return createErrorResponse(403, "Forbidden - Script not executable");
-            // }
-
             String extension = getFileExtension(scriptName);
             String interpreter = getInterpreter(extension);
             if (interpreter == null) {
                 return createErrorResponse(403, "Forbidden - Unsupported script type");
             }
-
-            // Note: We don't verify interpreter existence at startup to allow for
-            // different installations (e.g., python vs python3 vs py on Windows).
-            // If the interpreter is missing, the process will fail at runtime.
 
             Map<String, String> env = buildEnvironment(request, scriptName, pathInfo);
             String body = request.getBody();
@@ -98,101 +94,125 @@ public class CGIHandler {
             pb.command(command);
             pb.directory(cgiDir.toFile());
 
-            Map<String, String> processEnv = pb.environment();
-            processEnv.putAll(env);
+            // Clear environment and add only CGI variables
+            pb.environment().clear();
+            pb.environment().putAll(env);
 
-            // Redirect stderr to prevent deadlock (architectural limitation: cannot consume stderr in single-threaded event loop)
+            // Redirect stderr to prevent deadlock
             pb.redirectError(ProcessBuilder.Redirect.DISCARD);
 
             Process process = pb.start();
 
+            // Send body to script stdin if present
             if (body != null && !body.isEmpty()) {
-                try (OutputStream processInput = process.getOutputStream()) {
-                    processInput.write(body.getBytes());
-                    processInput.flush();
+                try (OutputStream os = process.getOutputStream()) {
+                    os.write(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    os.flush();
                 }
+            } else {
+                process.getOutputStream().close();
             }
 
+            // Read script output with timeout
             boolean finished = process.waitFor(CGI_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
             if (!finished) {
                 process.destroyForcibly();
-                return createErrorResponse(504, "Gateway Timeout - CGI script timed out");
+                return createErrorResponse(500, "Internal Server Error - CGI script timed out");
             }
 
             int exitCode = process.exitValue();
             if (exitCode != 0) {
-                return createErrorResponse(500, "Internal Server Error - CGI script failed with exit code " + exitCode);
+                return createErrorResponse(500, "Internal Server Error - Script exited with code " + exitCode);
             }
 
-            InputStream processOutput = process.getInputStream();
-            String output = readAllText(processOutput);
-
+            // Parse CGI output
+            String output = readAllText(process.getInputStream());
             return parseCGIOutput(output);
 
         } catch (IOException e) {
-            return createErrorResponse(500, "Internal Server Error - " + e.getMessage());
+            return createErrorResponse(500, "Internal Server Error - Failed to execute script: " + e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return createErrorResponse(500, "Internal Server Error - CGI execution interrupted");
         }
     }
 
+    private String extractQueryString(String path) {
+        int questionIndex = path.indexOf('?');
+        if (questionIndex >= 0 && questionIndex < path.length() - 1) {
+            return path.substring(questionIndex + 1);
+        }
+        return "";
+    }
+
     private Map<String, String> buildEnvironment(HttpRequest request, String scriptName, String pathInfo) {
         Map<String, String> env = new HashMap<>();
-        env.put("REQUEST_METHOD", request.getMethod() != null ? request.getMethod() : "GET");
-        env.put("SCRIPT_NAME", "/cgi-bin/" + scriptName);
+
+        // Required CGI/1.1 environment variables
+        env.put("REQUEST_METHOD", request.getMethod());
+        env.put("SCRIPT_NAME", routePrefix.endsWith("/") ? routePrefix + scriptName : routePrefix + "/" + scriptName);
         env.put("PATH_INFO", pathInfo);
+        env.put("QUERY_STRING", extractQueryString(request.getPath()));
+        env.put("SERVER_PROTOCOL", "HTTP/1.1");
+        env.put("SERVER_SOFTWARE", "LocalServer/1.0");
+        env.put("GATEWAY_INTERFACE", "CGI/1.1");
 
-        String queryString = extractQueryString(request.getPath());
-        env.put("QUERY_STRING", queryString != null ? queryString : "");
+        // Set Content-Length if present
+        String contentLength = request.getHeaders().get("Content-Length");
+        if (contentLength != null) {
+            env.put("CONTENT_LENGTH", contentLength);
+        }
 
-        String body = request.getBody();
-        if (body != null && !body.isEmpty()) {
-            env.put("CONTENT_LENGTH", String.valueOf(body.length()));
-            String contentType = request.getHeaders().get("Content-Type");
-            if (contentType != null) {
-                env.put("CONTENT_TYPE", contentType);
+        // Set Content-Type if present
+        String contentType = request.getHeaders().get("Content-Type");
+        if (contentType != null) {
+            env.put("CONTENT_TYPE", contentType);
+        }
+
+        // Pass HTTP headers as HTTP_* environment variables
+        for (Map.Entry<String, String> entry : request.getHeaders().entrySet()) {
+            String name = entry.getKey().toUpperCase().replace('-', '_');
+            if (!name.equals("CONTENT_LENGTH") && !name.equals("CONTENT_TYPE")) {
+                env.put("HTTP_" + name, entry.getValue());
             }
         }
 
         return env;
     }
 
-    private String extractQueryString(String pathWithQuery) {
-        if (pathWithQuery == null) {
-            return null;
-        }
-        int queryIndex = pathWithQuery.indexOf('?');
-        if (queryIndex >= 0 && queryIndex < pathWithQuery.length() - 1) {
-            return pathWithQuery.substring(queryIndex + 1);
-        }
-        return null;
-    }
-
     private HttpResponse parseCGIOutput(String output) {
-        if (output == null || output.isEmpty()) {
-            return createErrorResponse(500, "Internal Server Error - Empty CGI output");
-        }
-
-        String[] lines = output.split("\r?\n");
         HttpResponse response = new HttpResponse();
         response.setStatusCode(200);
         response.setStatusText("OK");
 
-        StringBuilder bodyBuilder = new StringBuilder();
-        boolean headersDone = false;
+        if (output == null || output.isEmpty()) {
+            response.setBody("".getBytes());
+            response.setHeader("Content-Length", "0");
+            response.setHeader("Connection", "close");
+            return response;
+        }
 
-        for (String line : lines) {
-            if (!headersDone) {
+        String[] lines = output.split("\r?\n");
+        boolean parsingHeaders = true;
+        StringBuilder bodyBuilder = new StringBuilder();
+
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+
+            if (parsingHeaders) {
                 if (line.isEmpty()) {
-                    headersDone = true;
-                } else {
-                    int colonIndex = line.indexOf(':');
-                    if (colonIndex > 0) {
-                        String name = line.substring(0, colonIndex).trim();
-                        String value = line.substring(colonIndex + 1).trim();
+                    parsingHeaders = false;
+                    continue;
+                }
+
+                int colonIndex = line.indexOf(':');
+                if (colonIndex > 0) {
+                    String name = line.substring(0, colonIndex).trim();
+                    String value = line.substring(colonIndex + 1).trim();
+
+                    if (!name.isEmpty()) {
                         if (name.equalsIgnoreCase("Status")) {
-                            String[] statusParts = value.split(" ", 2);
+                            String[] statusParts = value.split("\\s+", 2);
                             if (statusParts.length >= 1) {
                                 try {
                                     int statusCode = Integer.parseInt(statusParts[0]);
@@ -275,7 +295,7 @@ public class CGIHandler {
     }
 
     private HttpResponse createErrorResponse(int statusCode, String statusText) {
-        String errorPagePath = config.getErrorPages().get(statusCode);
+        String errorPagePath = (config != null && config.getErrorPages() != null) ? config.getErrorPages().get(statusCode) : null;
         if (errorPagePath != null) {
             try {
                 Path errorFile = Paths.get(errorPagePath).toAbsolutePath().normalize();

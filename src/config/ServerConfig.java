@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import router.Route;
 
 public class ServerConfig {
     private List<Integer> ports;
@@ -17,6 +18,7 @@ public class ServerConfig {
     private Set<String> serverNames;
     private boolean isDefaultServer;
     private String indexFile;
+    private List<Route> routes;
 
     public ServerConfig() {
         this.ports = new ArrayList<>();
@@ -26,6 +28,7 @@ public class ServerConfig {
         this.serverNames = new HashSet<>();
         this.isDefaultServer = false;
         this.indexFile = "index.html";
+        this.routes = new ArrayList<>();
     }
 
     public List<Integer> getPorts() {
@@ -106,5 +109,17 @@ public class ServerConfig {
 
     public void setIndexFile(String indexFile) {
         this.indexFile = indexFile;
+    }
+
+    public List<Route> getRoutes() {
+        return routes;
+    }
+
+    public void addRoute(Route route) {
+        this.routes.add(route);
+    }
+
+    public boolean hasRoutes() {
+        return routes != null && !routes.isEmpty();
     }
 }

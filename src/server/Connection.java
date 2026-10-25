@@ -198,17 +198,26 @@ public class Connection {
         }
 
         Router router = new Router();
-        Route defaultRoute = new Route("/", documentRoot);
-        router.setDefaultRoute(defaultRoute);
+        if (selectedConfig != null && selectedConfig.hasRoutes()) {
+            for (Route r : selectedConfig.getRoutes()) {
+                if (r.getPath().equals("/")) {
+                    router.setDefaultRoute(r);
+                }
+                router.addRoute(r);
+            }
+        } else {
+            Route defaultRoute = new Route("/", documentRoot, "root");
+            router.setDefaultRoute(defaultRoute);
 
-        String uploadDir = documentRoot + "/uploads";
-        Route uploadRoute = new Route("/upload", uploadDir);
-        uploadRoute.addAcceptedMethod("POST");
-        router.addRoute(uploadRoute);
+            String uploadDir = documentRoot + "/uploads";
+            Route uploadRoute = new Route("/upload", uploadDir, "upload");
+            uploadRoute.addAcceptedMethod("POST");
+            router.addRoute(uploadRoute);
 
-        String cgiDir = documentRoot + "/cgi-bin";
-        Route cgiRoute = new Route("/cgi-bin", cgiDir);
-        router.addRoute(cgiRoute);
+            String cgiDir = documentRoot + "/cgi-bin";
+            Route cgiRoute = new Route("/cgi-bin", cgiDir, "cgi");
+            router.addRoute(cgiRoute);
+        }
 
         // Reject paths with ".." to prevent path traversal attacks
         if (request.getPath().contains("..")) {
@@ -223,16 +232,16 @@ public class Connection {
                 writeBuffer = createErrorResponse(405, "Method Not Allowed");
             } else if (route.isRedirect()) {
                 writeBuffer = createRedirectResponse(route.getRedirectPath());
-            } else if (request.getPath().startsWith("/upload") && "POST".equalsIgnoreCase(request.getMethod())) {
-                UploadHandler uploadHandler = new UploadHandler(uploadDir, selectedConfig);
+            } else if (route.isUpload()) {
+                UploadHandler uploadHandler = new UploadHandler(route.getDocumentRoot(), selectedConfig, route.getPath());
                 HttpResponse response = uploadHandler.handle(request);
                 writeBuffer = response.toByteBuffer();
-            } else if (request.getPath().startsWith("/cgi-bin")) {
-                CGIHandler cgiHandler = new CGIHandler(cgiDir, selectedConfig);
+            } else if (route.isCgi()) {
+                CGIHandler cgiHandler = new CGIHandler(route.getDocumentRoot(), selectedConfig, route.getPath());
                 HttpResponse response = cgiHandler.handle(request);
                 writeBuffer = response.toByteBuffer();
             } else {
-                StaticHandler handler = new StaticHandler(route.getDocumentRoot(), selectedConfig);
+                StaticHandler handler = new StaticHandler(route.getDocumentRoot(), selectedConfig, route.getPath());
                 HttpResponse response = handler.handle(request);
                 writeBuffer = response.toByteBuffer();
             }

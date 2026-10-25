@@ -14,10 +14,16 @@ import java.util.stream.Stream;
 public class StaticHandler {
     private final String documentRoot;
     private final ServerConfig config;
+    private final String routePrefix;
 
     public StaticHandler(String documentRoot, ServerConfig config) {
+        this(documentRoot, config, null);
+    }
+
+    public StaticHandler(String documentRoot, ServerConfig config, String routePrefix) {
         this.documentRoot = documentRoot;
         this.config = config;
+        this.routePrefix = routePrefix;
     }
 
     public HttpResponse handle(HttpRequest request) {
@@ -118,8 +124,27 @@ public class StaticHandler {
             }
 
             Path rootPath = Paths.get(documentRoot).toAbsolutePath().normalize();
-            Path requestedPath = rootPath.resolve(normalizedPath).normalize();
 
+            // If a route prefix is provided (e.g. "/api"), attempt to resolve relative to route prefix first
+            if (routePrefix != null && !routePrefix.equals("/") && requestPath.startsWith(routePrefix)) {
+                String sub = requestPath.substring(routePrefix.length());
+                if (sub.startsWith("/")) {
+                    sub = sub.substring(1);
+                }
+                int qIdx = sub.indexOf('?');
+                if (qIdx >= 0) {
+                    sub = sub.substring(0, qIdx);
+                }
+                if (sub.isEmpty()) {
+                    sub = ".";
+                }
+                Path candidate = rootPath.resolve(sub).normalize();
+                if (candidate.startsWith(rootPath) && (Files.exists(candidate) || !Files.exists(rootPath.resolve(normalizedPath).normalize()))) {
+                    return candidate;
+                }
+            }
+
+            Path requestedPath = rootPath.resolve(normalizedPath).normalize();
             if (!requestedPath.startsWith(rootPath)) {
                 return null;
             }
