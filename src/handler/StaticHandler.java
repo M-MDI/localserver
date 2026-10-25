@@ -126,21 +126,25 @@ public class StaticHandler {
             Path rootPath = Paths.get(documentRoot).toAbsolutePath().normalize();
 
             // If a route prefix is provided (e.g. "/api"), attempt to resolve relative to route prefix first
-            if (routePrefix != null && !routePrefix.equals("/") && requestPath.startsWith(routePrefix)) {
-                String sub = requestPath.substring(routePrefix.length());
-                if (sub.startsWith("/")) {
-                    sub = sub.substring(1);
+            if (routePrefix != null && !routePrefix.equals("/")) {
+                String cleanReq = requestPath;
+                int q = cleanReq.indexOf('?');
+                if (q >= 0) {
+                    cleanReq = cleanReq.substring(0, q);
                 }
-                int qIdx = sub.indexOf('?');
-                if (qIdx >= 0) {
-                    sub = sub.substring(0, qIdx);
-                }
-                if (sub.isEmpty()) {
-                    sub = ".";
-                }
-                Path candidate = rootPath.resolve(sub).normalize();
-                if (candidate.startsWith(rootPath) && (Files.exists(candidate) || !Files.exists(rootPath.resolve(normalizedPath).normalize()))) {
-                    return candidate;
+                String prefixWithSlash = routePrefix.endsWith("/") ? routePrefix : routePrefix + "/";
+                if (cleanReq.equals(routePrefix) || cleanReq.startsWith(prefixWithSlash)) {
+                    String sub = cleanReq.substring(routePrefix.length());
+                    if (sub.startsWith("/")) {
+                        sub = sub.substring(1);
+                    }
+                    if (sub.isEmpty()) {
+                        sub = ".";
+                    }
+                    Path candidate = rootPath.resolve(sub).normalize();
+                    if (candidate.startsWith(rootPath) && (Files.exists(candidate) || !Files.exists(rootPath.resolve(normalizedPath).normalize()))) {
+                        return candidate;
+                    }
                 }
             }
 

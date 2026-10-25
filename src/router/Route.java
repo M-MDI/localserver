@@ -15,7 +15,10 @@ public class Route {
     }
 
     public Route(String path, String documentRoot, String type) {
-        this.path = path;
+        String p = (path == null) ? "/" : path.trim();
+        this.path = (p.length() > 1 && p.endsWith("/")) 
+            ? p.substring(0, p.length() - 1) 
+            : p;
         this.documentRoot = documentRoot;
         this.type = (type != null) ? type.toLowerCase() : "root";
         this.acceptedMethods = new HashSet<>();
@@ -54,6 +57,9 @@ public class Route {
     }
 
     public boolean isMethodAccepted(String method) {
+        if (method == null) {
+            return false;
+        }
         if (acceptedMethods.isEmpty()) {
             return true; // If no methods are specified, accept all
         }
@@ -76,13 +82,25 @@ public class Route {
         if (requestPath == null) {
             return false;
         }
+        String cleanPath = requestPath;
+        int queryIndex = cleanPath.indexOf('?');
+        if (queryIndex >= 0) {
+            cleanPath = cleanPath.substring(0, queryIndex);
+        }
+
+        if (cleanPath.isEmpty()) {
+            cleanPath = "/";
+        }
+
         if (path.equals("/")) {
+            return cleanPath.startsWith("/");
+        }
+
+        if (cleanPath.equals(path)) {
             return true;
         }
-        if (requestPath.equals(path)) {
-            return true;
-        }
+
         String prefix = path.endsWith("/") ? path : path + "/";
-        return requestPath.startsWith(prefix);
+        return cleanPath.startsWith(prefix);
     }
 }

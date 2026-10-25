@@ -97,8 +97,21 @@ public class ConfigLoader {
                 }
             }
 
-            if (line.startsWith("route ") || line.startsWith("route=")) {
-                String routeVal = line.startsWith("route=") ? line.substring(6).trim() : line.substring(6).trim();
+            if (line.equalsIgnoreCase("route")) {
+                throw new IOException("Malformed route directive: missing arguments");
+            }
+
+            if (line.endsWith(";")) {
+                line = line.substring(0, line.length() - 1).trim();
+            }
+
+            if (line.startsWith("route ") || line.startsWith("route\t") || line.startsWith("route=")) {
+                String routeVal;
+                if (line.startsWith("route=")) {
+                    routeVal = line.substring(6).trim();
+                } else {
+                    routeVal = line.substring(5).trim();
+                }
                 rawRoutes.add(routeVal);
                 continue;
             }
@@ -446,9 +459,17 @@ public class ConfigLoader {
             throw new IOException("Invalid route path '" + routePath + "' (must start with '/')");
         }
 
+        if (routePath.contains("..")) {
+            throw new IOException("Path traversal not allowed in route path: " + routePath);
+        }
+
+        String normalizedRoutePath = (routePath.length() > 1 && routePath.endsWith("/"))
+                ? routePath.substring(0, routePath.length() - 1)
+                : routePath;
+
         // Check for duplicate route path in this server block
         for (Route existing : config.getRoutes()) {
-            if (existing.getPath().equals(routePath)) {
+            if (existing.getPath().equals(normalizedRoutePath)) {
                 throw new IOException("Duplicate route path '" + routePath + "' in server " + config.getServerName());
             }
         }
@@ -543,13 +564,13 @@ public class ConfigLoader {
                 resolvedDir = Files.exists(cPath) ? cPath : base;
             } else {
                 // Static route: check if base has subfolder matching routePath
-                String sub = routePath.startsWith("/") ? routePath.substring(1) : routePath;
+                String sub = normalizedRoutePath.startsWith("/") ? normalizedRoutePath.substring(1) : normalizedRoutePath;
                 Path subPath = base.resolve(sub);
                 resolvedDir = (Files.exists(subPath) && Files.isDirectory(subPath)) ? subPath : base;
             }
         }
 
-        Route route = new Route(routePath, resolvedDir.toString(), type);
+        Route route = new Route(normalizedRoutePath, resolvedDir.toString(), type);
         for (String m : methods) {
             route.addAcceptedMethod(m);
         }
@@ -563,8 +584,21 @@ public class ConfigLoader {
     private static boolean isHttpMethod(String token) {
         if (token == null) return false;
         String upper = token.toUpperCase();
-        return upper.equals("GET") || upper.equals("POST") || upper.equals("DELETE") || 
-               upper.equals("HEAD") || upper.equals("PUT") || upper.startsWith("METHODS=");
+        if (upper.startsWith("METHODS=")) {
+            return true;
+        }
+        String[] parts = upper.split("[,;\\|]");
+        if (parts.length == 0) return false;
+        for (String part : parts) {
+            part = part.trim();
+            if (!part.isEmpty()) {
+                if (!part.equals("GET") && !part.equals("POST") && !part.equals("DELETE") && 
+                    !part.equals("HEAD") && !part.equals("PUT")) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static void extractMethods(String token, List<String> methods) {
